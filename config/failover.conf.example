@@ -1,0 +1,213 @@
+# ============================================================================
+# linux-dual-wan-failover — example configuration
+# ============================================================================
+#
+# Copy this file to /etc/linux-dual-wan-failover/failover.conf and edit.
+# Variables marked REQUIRED have no sensible defaults; the services will
+# refuse to start without them.
+#
+# Format: shell-style KEY=VALUE. The systemd units load it via
+# `EnvironmentFile=`, so quoting follows systemd-environment rules
+# (single value per line, no inline comments after the value).
+
+# ============================================================================
+# Interfaces (REQUIRED)
+# ============================================================================
+
+# Primary uplink interface name as it appears in `ip link`.
+# Examples: eth0 (DSL), enp1s0 (fiber NIC), wlp2s0 (wifi if you must).
+PRIMARY_IFACE=eth0
+
+# Backup uplink interface name. Typically an LTE/4G/5G modem (lte0, wwan0).
+BACKUP_IFACE=lte0
+
+# NetworkManager connection names (as shown by `nmcli connection show`).
+# Used to set per-connection `ipv4.route-metric` so route changes survive
+# NM reconnects.
+PRIMARY_NM_CONNECTION=WAN-Primary
+BACKUP_NM_CONNECTION=LTE-Backup
+
+# Optional secondary interfaces.  Leave empty to disable.
+LAN_INTERFACE=
+MGMT_INTERFACE=
+
+# ============================================================================
+# Routing metrics
+# ============================================================================
+# When the primary is healthy, kernel chooses the lowest metric:
+#   primary  metric 50  (preferred)
+#   backup   metric 200 (backup)
+#
+# When we fail over, the primary's metric is *demoted* to 500. The backup's
+# metric stays at 200 — now the lowest, so the kernel picks it. We never
+# delete the primary route, so failback is just `metric 50` again.
+
+PRIMARY_METRIC_NORMAL=50
+PRIMARY_METRIC_DEMOTED=500
+BACKUP_METRIC=200
+
+# Optional explicit gateway overrides. Most setups leave these unset and let
+# the failover stack auto-detect from `ip route` per-interface.
+PRIMARY_GATEWAY=
+BACKUP_GATEWAY=
+
+# ============================================================================
+# Health-check targets
+# ============================================================================
+
+# IPs probed via ICMP from each interface. Pick at least four reliable hosts
+# with diverse anycast / network operators.
+CHECK_IPS=("8.8.8.8" "1.1.1.1" "9.9.9.9" "208.67.222.222")
+
+# DNS servers used for the DNS test (independent of `/etc/resolv.conf`).
+DNS_SERVERS=("8.8.8.8" "1.1.1.1")
+
+# Domains to resolve in the DNS test. Should be names whose downtime is
+# extremely unlikely.
+DNS_TEST_DOMAINS=("google.com" "cloudflare.com")
+
+# ============================================================================
+# Timing
+# ============================================================================
+
+CHECK_INTERVAL=15                 # seconds between scoring rounds
+ROUTE_GUARDIAN_CHECK_INTERVAL=10  # seconds between route enforcement passes
+
+# ============================================================================
+# Hysteresis & anti-flap
+# ============================================================================
+
+# A score-based failover fires only when the primary stays below
+# FAILOVER_THRESHOLD_DOWN for FAILURE_THRESHOLD consecutive checks.
+# A failback fires only when the primary stays above FAILOVER_THRESHOLD_UP
+# for RECOVERY_THRESHOLD consecutive checks.
+FAILOVER_THRESHOLD_DOWN=60
+FAILOVER_THRESHOLD_UP=80
+HYSTERESIS_GAP=20
+
+FAILURE_THRESHOLD=5    # CHECK_INTERVAL × FAILURE_THRESHOLD = ~75 s tolerance
+RECOVERY_THRESHOLD=20  # CHECK_INTERVAL × RECOVERY_THRESHOLD = ~5 min stability
+
+# Emergency override — score below this triggers immediate failover, ignoring
+# the consecutive-check counter. Use sparingly; lower values are safer.
+EMERGENCY_THRESHOLD=15
+
+# Cooldowns (seconds) prevent ping-pong between primary and backup.
+ANTI_FLAPPING_DELAY=600          # 10 min minimum between score-based switches
+EMERGENCY_FAILBACK_COOLDOWN=900  # 15 min cooldown for emergency failback
+
+# ============================================================================
+# Failback gating
+# ============================================================================
+
+MIN_FAILBACK_SCORE=60        # primary must reach this before failback is even considered
+MIN_BACKUP_TIME=3600         # seconds we MUST stay on backup after failover (1 h)
+MIN_STABLE_DURATION=900      # primary must stay healthy for this long (15 min)
+STABILITY_RESET_THRESHOLD=50 # window resets only when score drops below this
+
+# ============================================================================
+# Last-resort failover (DANGEROUS — disabled by default)
+# ============================================================================
+# When the backup-link quota is exhausted (limit_pct >= 100%), `_backup_quota_cap`
+# clamps the backup score to 0 — preventing failover even when the primary is dead.
+# When LAST_RESORT_ENABLED=true, the orchestrator can override the cap and fail over
+# anyway, on the grounds that staying online matters more than the overage charge.
+#
+# Trade-off:
+#   false: zero surprise overage charges, but total outage if primary truly dies before quota resets
+#   true:  always-online, but you may pay overage to your ISP
+LAST_RESORT_ENABLED=false
+LAST_RESORT_PRIMARY_THRESHOLD=25
+LAST_RESORT_COOLDOWN=1800
+
+# ============================================================================
+# Latency / loss thresholds
+# ============================================================================
+
+# Wired (DSL / fiber / cable / second wired ISP).
+DSL_LATENCY_EXCELLENT=15
+DSL_LATENCY_GOOD=50
+DSL_LATENCY_WARNING=100
+DSL_LATENCY_CRITICAL=200
+
+# Cellular (LTE / 4G / 5G). Cellular has higher physics-floor latency, so the
+# thresholds are relaxed.
+LTE_LATENCY_EXCELLENT=40
+LTE_LATENCY_GOOD=80
+LTE_LATENCY_WARNING=150
+LTE_LATENCY_CRITICAL=300
+
+# Packet-loss percentages.
+PACKET_LOSS_GOOD=5
+PACKET_LOSS_WARNING=10
+PACKET_LOSS_CRITICAL=20
+
+# ============================================================================
+# Plugins — alerting
+# ============================================================================
+# Default: none.  Selectable backends ship under plugins/alerting/.
+#   none       — silent (default)
+#   mattermost — POST to a Mattermost incoming webhook
+#   webhook    — POST to any URL
+#   custom     — source $ALERTING_PLUGIN_PATH (must define `send_alert`)
+ALERTING_BACKEND=none
+ALERTING_PLUGIN_DIR=/usr/local/lib/linux-dual-wan-failover/plugins/alerting
+ALERTING_PLUGIN_PATH=
+
+# ============================================================================
+# Plugins — backup-link quota provider (optional)
+# ============================================================================
+# Default: none.  Selectable providers ship under plugins/quota-providers/.
+#
+# A quota provider runs as its own systemd timer (its install includes the
+# units), queries your modem or ISP portal, and writes a snapshot file. The
+# orchestrator reads the snapshot during scoring to cap the backup-interface
+# score when you approach your monthly quota — protecting you from overage
+# charges during a flaky-but-not-dead primary.
+#
+# Built-in providers:
+#   none           — disabled (default)
+#   netgear-lm1200 — reference implementation (Sierra Wireless D86 firmware)
+#   custom         — write your own from plugins/quota-providers/custom-template/
+QUOTA_PROVIDER=none
+
+# Path to the snapshot file produced by the selected provider.
+QUOTA_SNAPSHOT_PATH=/var/lib/linux-dual-wan-failover/quota-snapshot.json
+
+# Maximum age of the snapshot before the cap is ignored (graceful degradation
+# when the provider is stuck).
+QUOTA_SNAPSHOT_MAX_STALE_SEC=3600
+
+# Score caps per quota tier. The cap takes effect on the BACKUP_IFACE only.
+QUOTA_CAP_TIER_90=40    # ≥90 % of monthly quota → cap to 40
+QUOTA_CAP_TIER_96=10    # ≥96 % → cap to 10
+QUOTA_CAP_TIER_100=0    # ≥100 % → cap to 0 (effectively blocks failover)
+
+# ============================================================================
+# Hardware sensors (optional)
+# ============================================================================
+# Backend for temperature / throttle monitoring. The failover logic does
+# NOT depend on this — it's purely informational.
+#   none           — disabled (default)
+#   thermal_zone0  — read /sys/class/thermal/thermal_zone0/temp (cross-platform)
+#   vcgencmd       — Raspberry Pi specific (`vcgencmd measure_temp`)
+HARDWARE_TEMP_BACKEND=none
+
+# ============================================================================
+# Logging / state directories (override only if you know why)
+# ============================================================================
+
+LOG_DIR=/var/log/linux-dual-wan-failover
+STATE_DIR=/var/lib/linux-dual-wan-failover
+RUNTIME_DIR=/run/linux-dual-wan-failover
+
+# ============================================================================
+# Toolkit lookup (optional, advanced)
+# ============================================================================
+# bash-production-toolkit provides structured logging and atomic-write helpers.
+# linux-dual-wan-failover auto-detects the toolkit at:
+#   - $TOOLKIT_LIB        (env override)
+#   - /usr/local/lib/bash-production-toolkit/foundation
+#   - <repo>/vendor/bash-production-toolkit/src/foundation (if vendored)
+# Set this only if your toolkit lives somewhere else.
+TOOLKIT_LIB=

@@ -1,0 +1,36 @@
+[Unit]
+Description=linux-dual-wan-failover — orchestrator health check
+Documentation=https://github.com/fidpa/linux-dual-wan-failover
+After=failover-monitor.service
+Requires=failover-monitor.service
+
+[Service]
+Type=oneshot
+
+EnvironmentFile=-/etc/linux-dual-wan-failover/failover.conf
+
+# Verifies the orchestrator process is alive AND that its state file
+# was updated within the last HEALTH_CHECK_MAX_AGE seconds. Restarts
+# failover-monitor.service if either check fails.
+ExecStart=/usr/local/lib/linux-dual-wan-failover/services/failover-monitor-health-check.sh
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=failover-monitor-health-check
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictNamespaces=true
+LockPersonality=true
+
+# Health-check only needs to send signals to the orchestrator and
+# (optionally) call `systemctl restart`. CAP_KILL is enough for the
+# signal path; the systemctl path is mediated by polkit / dbus, which
+# don't require capabilities.
+CapabilityBoundingSet=CAP_KILL
+AmbientCapabilities=CAP_KILL

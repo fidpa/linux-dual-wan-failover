@@ -1,0 +1,55 @@
+[Unit]
+Description=linux-dual-wan-failover — Prometheus + SQLite metrics collector
+Documentation=https://github.com/fidpa/linux-dual-wan-failover
+After=failover-monitor.service
+Wants=failover-monitor.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Drop privileges: the collector reads /run/linux-dual-wan-failover/wan-state/
+# (world-readable) and writes to its own StateDirectory.
+User=linux-dual-wan-failover
+Group=linux-dual-wan-failover
+DynamicUser=yes
+
+EnvironmentFile=-/etc/linux-dual-wan-failover/failover.conf
+
+ExecStart=/usr/bin/python3 /usr/local/lib/linux-dual-wan-failover/services/failover-metrics-collector.py
+
+StateDirectory=linux-dual-wan-failover/metrics
+StateDirectoryMode=0755
+LogsDirectory=linux-dual-wan-failover
+LogsDirectoryMode=0755
+
+Restart=always
+RestartSec=10s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=failover-metrics-collector
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+# Read-only access to the orchestrator's runtime state directory.
+BindReadOnlyPaths=/run/linux-dual-wan-failover
+
+# No network capabilities required — collector is read-only.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+MemoryMax=200M
+CPUQuota=10%
+
+[Install]
+WantedBy=multi-user.target

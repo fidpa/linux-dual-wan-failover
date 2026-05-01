@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic quota collection (Netgear LM1200)
+Documentation=https://github.com/fidpa/linux-dual-wan-failover
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

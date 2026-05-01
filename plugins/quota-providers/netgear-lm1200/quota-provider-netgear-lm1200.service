@@ -1,0 +1,39 @@
+[Unit]
+Description=linux-dual-wan-failover — Netgear LM1200 quota collector
+Documentation=https://github.com/fidpa/linux-dual-wan-failover
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+StateDirectory=linux-dual-wan-failover
+StateDirectoryMode=0755
+
+EnvironmentFile=-/etc/linux-dual-wan-failover/failover.conf
+
+# NB: lm1200.env (which contains LM1200_PASSWORD) is *not* loaded as
+# EnvironmentFile — that would expose the password in /proc/<pid>/environ.
+# Instead the collector parses the file itself, validates 0600 perms,
+# and uses the password only in-memory.
+ExecStart=/usr/bin/python3 \
+  /usr/local/lib/linux-dual-wan-failover/plugins/quota-providers/netgear-lm1200/collect-quota.py \
+  --password-env-file /etc/linux-dual-wan-failover/lm1200.env
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictNamespaces=true
+LockPersonality=true
+
+# Read access to the config file with credentials.
+ReadOnlyPaths=/etc/linux-dual-wan-failover
+
+# No special capabilities — just outbound HTTP.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+MemoryMax=100M
+CPUQuota=10%

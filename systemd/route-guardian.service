@@ -1,0 +1,52 @@
+[Unit]
+Description=linux-dual-wan-failover — route enforcement
+Documentation=https://github.com/fidpa/linux-dual-wan-failover
+After=network-online.target NetworkManager.service
+Wants=network-online.target NetworkManager.service
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=exec
+User=root
+Group=root
+TimeoutStartSec=60s
+
+EnvironmentFile=-/etc/linux-dual-wan-failover/failover.conf
+
+ExecStart=/usr/local/lib/linux-dual-wan-failover/services/route-guardian.sh monitor
+
+RuntimeDirectory=linux-dual-wan-failover
+RuntimeDirectoryMode=0755
+StateDirectory=linux-dual-wan-failover/route-guardian
+StateDirectoryMode=0750
+LogsDirectory=linux-dual-wan-failover
+LogsDirectoryMode=0755
+
+Restart=always
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=route-guardian
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+# Needs CAP_NET_ADMIN for `ip route` manipulation.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+MemoryMax=100M
+CPUQuota=10%
+
+[Install]
+WantedBy=multi-user.target

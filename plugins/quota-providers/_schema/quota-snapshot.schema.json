@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/fidpa/linux-dual-wan-failover/raw/main/plugins/quota-providers/_schema/quota-snapshot.schema.json",
+  "title": "WAN Backup-Link Quota Snapshot",
+  "description": "Schema for the JSON file written by a quota provider plugin. Read by failover-monitor's _backup_quota_cap and _backup_quota_exhausted helpers.",
+  "type": "object",
+  "required": ["limit_pct", "collected_at"],
+  "additionalProperties": true,
+  "properties": {
+    "limit_pct": {
+      "description": "Percentage of monthly data quota consumed on the backup link. null = unknown or no quota configured upstream.",
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "collected_at": {
+      "description": "ISO-8601 UTC timestamp when the upstream API was queried. failover-monitor uses file mtime for staleness, so this is informational/observability only.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "provider": {
+      "description": "Free-text identifier of the quota provider. E.g. 'netgear-lm1200', 'huawei-e8372', 'isp-portal-screenscrape'.",
+      "type": "string"
+    }
+  }
+}
