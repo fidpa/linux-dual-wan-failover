@@ -1,0 +1,26 @@
+linux-dual-wan-failover
+Copyright (c) 2026 Marc Allgeier (fidpa)
+
+This product is distributed under the MIT License (see LICENSE).
+
+------------------------------------------------------------------------
+Third-party software
+------------------------------------------------------------------------
+
+This product is designed to integrate with — and may bundle, depending on
+the install method — components from the bash-production-toolkit project:
+
+    https://github.com/fidpa/bash-production-toolkit
+    Copyright (c) 2025 Marc Allgeier (fidpa)
+    MIT License
+
+When linux-dual-wan-failover is distributed with vendored toolkit source
+(e.g. git subtree), the toolkit's MIT license text is preserved at:
+
+    LICENSES/bash-production-toolkit-LICENSE
+
+When linux-dual-wan-failover is distributed without vendored toolkit
+source (default — toolkit is an external dependency installed at
+/usr/local/lib/bash-production-toolkit/), the toolkit retains its own
+LICENSE file at the install location and no further attribution is
+required by either project.

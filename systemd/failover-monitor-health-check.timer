@@ -1,0 +1,13 @@
+[Unit]
+Description=Timer for linux-dual-wan-failover orchestrator health check
+Documentation=https://github.com/fidpa/linux-dual-wan-failover
+
+[Timer]
+# First check 5 minutes after boot, then every 5 minutes.
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

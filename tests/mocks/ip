@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Mock for `ip` — produces deterministic output for the tests.
+case "$*" in
+    "route show")
+        cat <<'EOF'
+default via 192.0.2.1 dev eth0 proto dhcp metric 50
+default via 192.0.2.10 dev lte0 proto dhcp metric 200
+192.0.2.0/24 dev eth0 proto kernel scope link src 192.0.2.5 metric 50
+EOF
+        ;;
+    "route get 8.8.8.8")
+        echo "8.8.8.8 via 192.0.2.1 dev eth0 src 192.0.2.5 uid 0"
+        ;;
+    "-br link")
+        cat <<'EOF'
+lo        UNKNOWN   00:00:00:00:00:00 <LOOPBACK,UP,LOWER_UP>
+eth0      UP        02:00:00:00:00:01 <BROADCAST,MULTICAST,UP,LOWER_UP>
+lte0      UP        02:00:00:00:00:02 <BROADCAST,MULTICAST,UP,LOWER_UP>
+EOF
+        ;;
+    *)
+        echo "mock ip: unhandled args: $*" >&2
+        exit 0  # don't break tests on unhandled paths
+        ;;
+esac

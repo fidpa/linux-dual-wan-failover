@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Mock for `nmcli` — minimal stub; tests that need richer behaviour can
+# override $PATH again with a more specific mock.
+case "$*" in
+    "connection show --active")
+        cat <<'EOF'
+NAME            UUID                                  TYPE      DEVICE
+WAN-Primary     00000000-0000-0000-0000-000000000001  ethernet  eth0
+LTE-Backup      00000000-0000-0000-0000-000000000002  gsm       lte0
+EOF
+        ;;
+    "device status")
+        cat <<'EOF'
+DEVICE  TYPE      STATE      CONNECTION
+eth0    ethernet  connected  WAN-Primary
+lte0    gsm       connected  LTE-Backup
+EOF
+        ;;
+    *)
+        # Unhandled paths: silent success.
+        exit 0
+        ;;
+esac

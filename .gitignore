@@ -1,0 +1,38 @@
+# Publishing assets — not part of the repo
+LINKEDIN_POST.md
+
+# Local config overrides and secrets — never commit
+*.local
+.env
+.env.local
+.env.secrets
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Build / test
+*.log
+*.tmp
+coverage/
+.bats-cache/
+
+# Backups created by editors
+*~
+*.bak
+
+# Plugin author scratchpad
+plugins/*/.scratch/

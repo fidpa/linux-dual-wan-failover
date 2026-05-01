@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Mock for `ping` — succeeds for any host on `eth0`, fails for `lte0` unless
+# overridden via $MOCK_PING_LTE_OK=1. Tests can flip the env var to drive
+# specific scenarios.
+iface=""
+target="$1"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -I) iface="$2"; shift 2 ;;
+        -*) shift ;;
+        *)  target="$1"; shift ;;
+    esac
+done
+
+if [[ "$iface" == "lte0" && "${MOCK_PING_LTE_OK:-0}" != "1" ]]; then
+    echo "ping: lte0 down (mock)" >&2
+    exit 1
+fi
+
+cat <<EOF
+PING $target ($target) from mock $iface: 56 data bytes
+64 bytes from $target: icmp_seq=1 ttl=128 time=10.0 ms
+64 bytes from $target: icmp_seq=2 ttl=128 time=10.0 ms
+64 bytes from $target: icmp_seq=3 ttl=128 time=10.0 ms
+
+--- $target ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2003ms
+rtt min/avg/max/mdev = 10.000/10.000/10.000/0.000 ms
+EOF
+exit 0

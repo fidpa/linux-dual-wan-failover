@@ -1,0 +1,51 @@
+[Unit]
+Description=linux-dual-wan-failover — event-driven detection (nmcli)
+Documentation=https://github.com/fidpa/linux-dual-wan-failover
+After=network-online.target NetworkManager.service failover-monitor.service
+Wants=network-online.target NetworkManager.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+EnvironmentFile=-/etc/linux-dual-wan-failover/failover.conf
+
+ExecStart=/usr/local/lib/linux-dual-wan-failover/services/nmcli-failover-monitor.sh
+
+RuntimeDirectory=linux-dual-wan-failover
+RuntimeDirectoryMode=0755
+StateDirectory=linux-dual-wan-failover/nmcli-monitor
+StateDirectoryMode=0750
+LogsDirectory=linux-dual-wan-failover
+LogsDirectoryMode=0755
+
+Restart=always
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nmcli-failover-monitor
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+# Needs to send SIGUSR1 to failover-monitor; otherwise read-only ops on `ip` and `nmcli`.
+CapabilityBoundingSet=CAP_KILL CAP_NET_ADMIN
+AmbientCapabilities=CAP_KILL CAP_NET_ADMIN
+
+MemoryMax=50M
+CPUQuota=20%
+
+[Install]
+WantedBy=multi-user.target
