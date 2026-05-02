@@ -48,8 +48,18 @@ BindReadOnlyPaths=/run/linux-dual-wan-failover
 CapabilityBoundingSet=
 AmbientCapabilities=
 
+# The collector spawns short-lived bash subshells that run 10 ping samples,
+# DoH curl calls and jq parsing. These bursts are CPU-spiky for a few hundred
+# milliseconds each. With CPUQuota=10% (= 100 ms per 1 s period) we measured
+# ~95 % throttling on a Pi 5, which inflated DNS/HTTP latency in the resulting
+# Prometheus metrics by an order of magnitude — and that in turn drove the
+# end-to-end penalty in failover-monitor to misclassify a healthy primary.
+#
+# 50 % is a safe default for a multi-purpose host. On a dedicated router box
+# (the typical deployment) feel free to remove CPUQuota entirely so the
+# subprocess bursts can use whatever the kernel scheduler offers.
 MemoryMax=200M
-CPUQuota=10%
+CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target

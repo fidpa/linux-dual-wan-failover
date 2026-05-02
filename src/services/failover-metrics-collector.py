@@ -49,7 +49,9 @@ from typing import Any
 # Configuration - Path Objects (pathlib Best Practice 2025)
 METRICS_FILE = Path("/run/linux-dual-wan-failover/wan-state/connection_metrics")
 STATE_FILE = Path("/run/linux-dual-wan-failover/wan-state/active_wan")
-STATE_PERSISTENCE_FILE = Path("/run/linux-dual-wan-failover/wan-state/metrics_collector_state")
+STATE_PERSISTENCE_FILE = Path(
+    "/run/linux-dual-wan-failover/wan-state/metrics_collector_state"
+)
 FAILOVER_LOG = Path("/var/log/linux-dual-wan-failover/failover-enhanced.log")
 
 # RRD Configuration
@@ -66,7 +68,9 @@ LOG_DIR = Path(os.getenv("LOG_DIR", "/var/log/linux-dual-wan-failover"))
 LOG_FILE = LOG_DIR / "failover-metrics-collector.log"
 
 # Operator config (read once at startup; not hot-reloaded).
-CONFIG_FILE = Path(os.getenv("FAILOVER_CONFIG", "/etc/linux-dual-wan-failover/failover.conf"))
+CONFIG_FILE = Path(
+    os.getenv("FAILOVER_CONFIG", "/etc/linux-dual-wan-failover/failover.conf")
+)
 
 
 def _read_config_value(key: str, default: str) -> str:
@@ -87,8 +91,9 @@ def _read_config_value(key: str, default: str) -> str:
                 m = pat.match(line)
                 if m:
                     val = m.group(1).strip()
-                    if (val.startswith('"') and val.endswith('"')) or \
-                       (val.startswith("'") and val.endswith("'")):
+                    if (val.startswith('"') and val.endswith('"')) or (
+                        val.startswith("'") and val.endswith("'")
+                    ):
                         val = val[1:-1]
                     return val
     except OSError:
@@ -96,7 +101,9 @@ def _read_config_value(key: str, default: str) -> str:
     return default
 
 
-PRIMARY_IFACE = os.getenv("PRIMARY_IFACE") or _read_config_value("PRIMARY_IFACE", "eth0")
+PRIMARY_IFACE = os.getenv("PRIMARY_IFACE") or _read_config_value(
+    "PRIMARY_IFACE", "eth0"
+)
 BACKUP_IFACE = os.getenv("BACKUP_IFACE") or _read_config_value("BACKUP_IFACE", "lte0")
 
 # Collection interval (seconds)
@@ -105,12 +112,13 @@ COLLECTION_INTERVAL = 5
 # Logging Configuration Constants
 LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB
 LOG_BACKUP_COUNT = 5
-LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s%(extra_fields)s'
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s%(extra_fields)s"
 
 # Metrics Collection Intervals (iterations, 5s each)
 METRICS_SUMMARY_INTERVAL = 12  # 60 seconds
-WAN_QUALITY_INTERVAL = 6       # 30 seconds
-DNS_DETAILED_INTERVAL = 12     # 60 seconds
+WAN_QUALITY_INTERVAL = 6  # 30 seconds
+DNS_DETAILED_INTERVAL = 12  # 60 seconds
+
 
 # Custom formatter for structured logging
 class StructuredFormatter(logging.Formatter):
@@ -128,10 +136,27 @@ class StructuredFormatter(logging.Formatter):
 
     # Standard LogRecord attributes to exclude from extra fields
     _STANDARD_ATTRS = {
-        'name', 'msg', 'args', 'created', 'filename', 'funcName',
-        'levelname', 'levelno', 'lineno', 'module', 'msecs', 'message',
-        'pathname', 'process', 'processName', 'relativeCreated',
-        'thread', 'threadName', 'exc_info', 'exc_text', 'stack_info'
+        "name",
+        "msg",
+        "args",
+        "created",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "module",
+        "msecs",
+        "message",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "exc_info",
+        "exc_text",
+        "stack_info",
     }
 
     def format(self, record: logging.LogRecord) -> str:
@@ -152,6 +177,7 @@ class StructuredFormatter(logging.Formatter):
         record.extra_fields = f" [{', '.join(extra_fields)}]" if extra_fields else ""
         return super().format(record)
 
+
 # Setup logging with structured format (v2.2)
 # Structured logging pattern: Include context fields for better filtering
 # Uses StructuredFormatter directly (no intermediate formatter)
@@ -161,7 +187,7 @@ file_handler = RotatingFileHandler(
     str(LOG_FILE),  # pathlib → str for RotatingFileHandler
     maxBytes=LOG_MAX_BYTES,
     backupCount=LOG_BACKUP_COUNT,
-    mode='a'
+    mode="a",
 )
 
 # Console handler
@@ -172,10 +198,7 @@ structured_formatter = StructuredFormatter(LOG_FORMAT)
 file_handler.setFormatter(structured_formatter)
 console_handler.setFormatter(structured_formatter)
 
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[file_handler, console_handler]
-)
+logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
 
 logger = logging.getLogger()  # Get root logger
 
@@ -234,11 +257,18 @@ class FailoverMetricsCollector:
                         logger.info("Loaded persisted interface state: %s", interface)
                         return interface
                     if interface:
-                        logger.warning("Invalid persisted state '%s', ignoring", interface)
+                        logger.warning(
+                            "Invalid persisted state '%s', ignoring", interface
+                        )
         except OSError as e:
-            logger.warning("Could not load persisted state: %s", e,
-                           extra={'file': str(STATE_PERSISTENCE_FILE),
-                                  'error_type': type(e).__name__})
+            logger.warning(
+                "Could not load persisted state: %s",
+                e,
+                extra={
+                    "file": str(STATE_PERSISTENCE_FILE),
+                    "error_type": type(e).__name__,
+                },
+            )
         return None
 
     def _persist_state(self, interface: str) -> None:
@@ -254,16 +284,21 @@ class FailoverMetricsCollector:
             STATE_PERSISTENCE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
             # Write state
-            with open(STATE_PERSISTENCE_FILE, 'w') as f:
+            with open(STATE_PERSISTENCE_FILE, "w") as f:
                 f.write(interface)
 
             logger.debug("Persisted interface state: %s", interface)
         except OSError as e:
-            logger.error("Could not persist state: %s", e,
-                        extra={'file': str(STATE_PERSISTENCE_FILE),
-                              'interface': interface,
-                              'error_type': type(e).__name__},
-                        exc_info=True)
+            logger.error(
+                "Could not persist state: %s",
+                e,
+                extra={
+                    "file": str(STATE_PERSISTENCE_FILE),
+                    "interface": interface,
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
     def _read_bash_failover_duration(self) -> int | None:
         """
@@ -281,14 +316,20 @@ class FailoverMetricsCollector:
             Exception: If file unreadable (logged, not raised)
         """
         try:
-            duration_file = Path("/run/linux-dual-wan-failover/wan-state/last_failover_duration_ms")
+            duration_file = Path(
+                "/run/linux-dual-wan-failover/wan-state/last_failover_duration_ms"
+            )
             if duration_file.exists():
                 with open(duration_file) as f:
                     duration_ms = int(f.read().strip())
-                    logger.debug("Read Bash-measured failover duration: %dms", duration_ms)
+                    logger.debug(
+                        "Read Bash-measured failover duration: %dms", duration_ms
+                    )
                     return duration_ms
             else:
-                logger.debug("No Bash failover duration file found (expected for first run)")
+                logger.debug(
+                    "No Bash failover duration file found (expected for first run)"
+                )
                 return None
         except ValueError as e:
             logger.warning("Invalid duration value in %s: %s", duration_file, e)
@@ -311,10 +352,7 @@ class FailoverMetricsCollector:
         try:
             # Check if rrdtool command exists
             result = subprocess.run(
-                ['which', 'rrdtool'],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["which", "rrdtool"], capture_output=True, text=True, timeout=5
             )
             if result.returncode != 0:
                 logger.warning("RRDtool not installed - will skip RRD updates")
@@ -322,7 +360,9 @@ class FailoverMetricsCollector:
 
             # Check if RRD file exists
             if not RRD_FILE.exists():
-                logger.warning("RRD file not found at %s - run setup-rrd.sh first", RRD_FILE)
+                logger.warning(
+                    "RRD file not found at %s - run setup-rrd.sh first", RRD_FILE
+                )
                 return False
 
             logger.info("RRDtool available and database found")
@@ -357,7 +397,7 @@ class FailoverMetricsCollector:
         # WAL = Write-Ahead Logging (SQLite Best Practice 2025)
         cursor.execute("PRAGMA journal_mode=WAL;")
         wal_mode = cursor.fetchone()[0]
-        if wal_mode == 'wal':
+        if wal_mode == "wal":
             logger.info("SQLite WAL mode enabled")
 
         # Create failover events table (with v2.2.0 schema migration)
@@ -384,14 +424,14 @@ class FailoverMetricsCollector:
         cursor.execute("PRAGMA table_info(failover_events)")
         columns = {row[1] for row in cursor.fetchall()}
 
-        if 'actual_failover_duration_ms' not in columns:
+        if "actual_failover_duration_ms" not in columns:
             cursor.execute("""
                 ALTER TABLE failover_events
                 ADD COLUMN actual_failover_duration_ms INTEGER
             """)
             logger.info("Added column: actual_failover_duration_ms (schema migration)")
 
-        if 'inter_event_duration_seconds' not in columns:
+        if "inter_event_duration_seconds" not in columns:
             cursor.execute("""
                 ALTER TABLE failover_events
                 ADD COLUMN inter_event_duration_seconds INTEGER
@@ -490,11 +530,16 @@ class FailoverMetricsCollector:
             try:
                 raw = json.loads(content)
             except json.JSONDecodeError as e:
-                logger.error("Invalid JSON in metrics file: %s", e,
-                             extra={'file': str(METRICS_FILE),
-                                    'first_200_chars': content[:200] if content else 'empty',
-                                    'error_type': 'JSONDecodeError'},
-                             exc_info=True)
+                logger.error(
+                    "Invalid JSON in metrics file: %s",
+                    e,
+                    extra={
+                        "file": str(METRICS_FILE),
+                        "first_200_chars": content[:200] if content else "empty",
+                        "error_type": "JSONDecodeError",
+                    },
+                    exc_info=True,
+                )
                 return None
 
             primary_iface = raw.get("primary_interface", PRIMARY_IFACE)
@@ -533,26 +578,36 @@ class FailoverMetricsCollector:
                 else:
                     metrics["active_interface"] = primary_iface
             except OSError as e:
-                logger.warning("Could not read state file: %s", e,
-                               extra={'file': str(STATE_FILE)})
+                logger.warning(
+                    "Could not read state file: %s", e, extra={"file": str(STATE_FILE)}
+                )
                 metrics["active_interface"] = primary_iface
 
             return metrics
 
         except FileNotFoundError as e:
-            logger.error("Metrics file not accessible: %s", e,
-                         extra={'file': str(METRICS_FILE)},
-                         exc_info=True)
+            logger.error(
+                "Metrics file not accessible: %s",
+                e,
+                extra={"file": str(METRICS_FILE)},
+                exc_info=True,
+            )
             return None
         except PermissionError as e:
-            logger.error("Permission denied reading metrics: %s", e,
-                         extra={'file': str(METRICS_FILE)},
-                         exc_info=True)
+            logger.error(
+                "Permission denied reading metrics: %s",
+                e,
+                extra={"file": str(METRICS_FILE)},
+                exc_info=True,
+            )
             return None
         except (OSError, json.JSONDecodeError) as e:
-            logger.error("Unexpected error reading metrics: %s", e,
-                         extra={'error_type': type(e).__name__},
-                         exc_info=True)
+            logger.error(
+                "Unexpected error reading metrics: %s",
+                e,
+                extra={"error_type": type(e).__name__},
+                exc_info=True,
+            )
             return None
 
     def parse_detailed_metrics(self) -> tuple[float, float]:
@@ -569,15 +624,18 @@ class FailoverMetricsCollector:
                 return 0.0, 0.0
 
             result = subprocess.run(
-                ['tail', '-20', str(FAILOVER_LOG)],
+                ["tail", "-20", str(FAILOVER_LOG)],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
 
             if result.returncode != 0:
-                logger.debug("tail command failed with code %d: %s",
-                             result.returncode, result.stderr)
+                logger.debug(
+                    "tail command failed with code %d: %s",
+                    result.returncode,
+                    result.stderr,
+                )
                 return 0.0, 0.0
 
             def _extract(line: str) -> float | None:
@@ -616,9 +674,12 @@ class FailoverMetricsCollector:
             logger.debug("tail command not found")
             return 0.0, 0.0
         except (subprocess.SubprocessError, OSError) as e:
-            logger.error("Error parsing detailed metrics: %s", e,
-                         extra={'error_type': type(e).__name__},
-                         exc_info=True)
+            logger.error(
+                "Error parsing detailed metrics: %s",
+                e,
+                extra={"error_type": type(e).__name__},
+                exc_info=True,
+            )
             return 0.0, 0.0
 
     def update_rrd(self, metrics: dict[str, Any]) -> None:
@@ -659,13 +720,13 @@ class FailoverMetricsCollector:
                 "0",  # failover_count reserved
             ]
 
-            update_string = ':'.join(values)
+            update_string = ":".join(values)
 
             # Update RRD
             result = subprocess.run(
-                ['rrdtool', 'update', str(RRD_FILE), update_string],
+                ["rrdtool", "update", str(RRD_FILE), update_string],
                 capture_output=True,
-                text=True
+                text=True,
             )
 
             if result.returncode != 0:
@@ -688,21 +749,24 @@ class FailoverMetricsCollector:
             message: Alert message text
         """
         try:
-            common_sh = Path(os.getenv(
-                "FAILOVER_COMMON_SH",
-                "/usr/local/lib/linux-dual-wan-failover/lib/common.sh",
-            ))
+            common_sh = Path(
+                os.getenv(
+                    "FAILOVER_COMMON_SH",
+                    "/usr/local/lib/linux-dual-wan-failover/lib/common.sh",
+                )
+            )
             if not common_sh.exists():
                 logger.debug("common.sh not found at %s — skipping alert", common_sh)
                 return
 
             bash_cmd = (
-                f'source "{common_sh}" 2>/dev/null && '
-                f'send_notification "$1" warning'
+                f'source "{common_sh}" 2>/dev/null && send_notification "$1" warning'
             )
             proc = subprocess.run(
                 ["bash", "-c", bash_cmd, "_", message],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if proc.returncode == 0:
                 logger.info(
@@ -746,7 +810,7 @@ class FailoverMetricsCollector:
             - Updates self.last_active_interface
             - Resets self.event_start_timestamp
         """
-        current_interface = metrics['active_interface']
+        current_interface = metrics["active_interface"]
 
         if self.last_active_interface is None:
             self.last_active_interface = current_interface
@@ -759,8 +823,13 @@ class FailoverMetricsCollector:
             # or a failback (now on primary). Anchored to the configured
             # PRIMARY_IFACE / BACKUP_IFACE so the event direction is correct
             # regardless of how the interfaces are named.
-            event_type = 'failover' if current_interface == BACKUP_IFACE else 'failback'
-            logger.info("Detected %s: %s -> %s", event_type, self.last_active_interface, current_interface)
+            event_type = "failover" if current_interface == BACKUP_IFACE else "failback"
+            logger.info(
+                "Detected %s: %s -> %s",
+                event_type,
+                self.last_active_interface,
+                current_interface,
+            )
 
             # Record the event (with duration calculation)
             self.record_failover_event(
@@ -768,7 +837,7 @@ class FailoverMetricsCollector:
                 self.last_active_interface,
                 current_interface,
                 self.last_metrics,
-                metrics
+                metrics,
             )
 
             self.last_active_interface = current_interface
@@ -786,7 +855,7 @@ class FailoverMetricsCollector:
         from_iface: str,
         to_iface: str,
         last_metrics: dict[str, Any],
-        current_metrics: dict[str, Any]
+        current_metrics: dict[str, Any],
     ) -> None:
         """
         Record a failover event in SQLite with dual-duration tracking.
@@ -818,7 +887,9 @@ class FailoverMetricsCollector:
 
             # NEW: Read actual failover duration from Bash script (millisecond-precision)
             actual_duration_ms = self._read_bash_failover_duration()
-            actual_duration_seconds = (actual_duration_ms // 1000) if actual_duration_ms else None
+            actual_duration_seconds = (
+                (actual_duration_ms // 1000) if actual_duration_ms else None
+            )
 
             # Calculate inter-event duration (time between consecutive failover events)
             inter_event_seconds = None
@@ -827,13 +898,26 @@ class FailoverMetricsCollector:
                 duration_delta = datetime.now() - self.event_start_timestamp
                 inter_event_seconds = int(duration_delta.total_seconds())
                 inter_event_ms = int(duration_delta.total_seconds() * 1000)
-                logger.debug("Inter-event duration: %dms (%ds)", inter_event_ms, inter_event_seconds)
+                logger.debug(
+                    "Inter-event duration: %dms (%ds)",
+                    inter_event_ms,
+                    inter_event_seconds,
+                )
 
             # Log both durations for clarity
             if actual_duration_ms:
-                logger.info("%s - Actual: %dms, Inter-event: %sms", event_type.upper(), actual_duration_ms, inter_event_ms)
+                logger.info(
+                    "%s - Actual: %dms, Inter-event: %sms",
+                    event_type.upper(),
+                    actual_duration_ms,
+                    inter_event_ms,
+                )
             else:
-                logger.info("%s - Inter-event: %sms (no Bash duration available)", event_type.upper(), inter_event_ms)
+                logger.info(
+                    "%s - Inter-event: %sms (no Bash duration available)",
+                    event_type.upper(),
+                    inter_event_ms,
+                )
 
             # NEW: SLA check uses ACTUAL failover duration (not inter-event!)
             if actual_duration_seconds and actual_duration_seconds > 5:
@@ -843,50 +927,69 @@ class FailoverMetricsCollector:
                 alert_message += f"*From:* {from_iface}\n"
                 alert_message += f"*To:* {to_iface}\n"
                 alert_message += "*Expected:* <5s\n\n"
-                alert_message += f"_Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_"
+                alert_message += (
+                    f"_Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_"
+                )
                 self._send_alert(alert_message)
-                logger.warning("Slow %s detected: %ss (>5s SLA)", event_type, actual_duration_seconds)
+                logger.warning(
+                    "Slow %s detected: %ss (>5s SLA)",
+                    event_type,
+                    actual_duration_seconds,
+                )
 
             # Legacy compatibility: Keep failover_start_time for old code
-            if event_type == 'failback' and self.failover_start_time:
+            if event_type == "failback" and self.failover_start_time:
                 self.failover_start_time = None
-            elif event_type == 'failover':
+            elif event_type == "failover":
                 self.failover_start_time = datetime.now()
 
             # NEW: Insert with dual-duration columns
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO failover_events
                 (timestamp, event_type, from_interface, to_interface,
                  primary_score_before, backup_score_before,
                  primary_latency_before, backup_latency_before,
                  reason, duration_seconds, actual_failover_duration_ms, inter_event_duration_seconds)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                datetime.now(),
-                event_type,
-                from_iface,
-                to_iface,
-                last_metrics.get('primary_score', 0),
-                last_metrics.get('backup_score', 0),
-                primary_latency,
-                backup_latency,
-                (f"Score change: primary={current_metrics.get('primary_score', 0)}, "
-                 f"backup={current_metrics.get('backup_score', 0)}"),
-                actual_duration_seconds,
-                actual_duration_ms,
-                inter_event_seconds,
-            ))
+            """,
+                (
+                    datetime.now(),
+                    event_type,
+                    from_iface,
+                    to_iface,
+                    last_metrics.get("primary_score", 0),
+                    last_metrics.get("backup_score", 0),
+                    primary_latency,
+                    backup_latency,
+                    (
+                        f"Score change: primary={current_metrics.get('primary_score', 0)}, "
+                        f"backup={current_metrics.get('backup_score', 0)}"
+                    ),
+                    actual_duration_seconds,
+                    actual_duration_ms,
+                    inter_event_seconds,
+                ),
+            )
 
             conn.commit()
             conn.close()
 
-            logger.info("Recorded %s event in database (actual: %sms, inter-event: %sms)", event_type, actual_duration_ms, inter_event_ms)
+            logger.info(
+                "Recorded %s event in database (actual: %sms, inter-event: %sms)",
+                event_type,
+                actual_duration_ms,
+                inter_event_ms,
+            )
 
             # NEW: Export Prometheus metrics with both durations
             self._export_prometheus_failover_duration(
-                event_type, from_iface, to_iface,
-                actual_duration_seconds, actual_duration_ms,
-                inter_event_seconds
+                event_type,
+                from_iface,
+                to_iface,
+                actual_duration_seconds,
+                actual_duration_ms,
+                inter_event_seconds,
             )
 
         except sqlite3.Error as e:
@@ -899,7 +1002,7 @@ class FailoverMetricsCollector:
         to_iface: str,
         actual_duration_seconds: int | None,
         actual_duration_ms: int | None,
-        inter_event_seconds: int | None = None
+        inter_event_seconds: int | None = None,
     ) -> None:
         """
         Export failover durations to Prometheus textfile collector.
@@ -930,37 +1033,58 @@ class FailoverMetricsCollector:
             tmp_file = prom_file.with_suffix(".tmp")
 
             # Write to temporary file first (atomic replace pattern)
-            with open(tmp_file, 'w') as f:
+            with open(tmp_file, "w") as f:
                 # Actual failover duration (Bash-measured)
                 if actual_duration_ms is not None:
-                    f.write("# HELP failover_actual_duration_milliseconds Actual failover execution time (Bash-measured)\n")
+                    f.write(
+                        "# HELP failover_actual_duration_milliseconds Actual failover execution time (Bash-measured)\n"
+                    )
                     f.write("# TYPE failover_actual_duration_milliseconds gauge\n")
-                    f.write(f'failover_actual_duration_milliseconds{{event_type="{event_type}",from="{from_iface}",to="{to_iface}"}} {actual_duration_ms}\n')
+                    f.write(
+                        f'failover_actual_duration_milliseconds{{event_type="{event_type}",from="{from_iface}",to="{to_iface}"}} {actual_duration_ms}\n'
+                    )
                     f.write("\n")
 
                 if actual_duration_seconds is not None:
-                    f.write("# HELP failover_actual_duration_seconds Actual failover execution time in seconds\n")
+                    f.write(
+                        "# HELP failover_actual_duration_seconds Actual failover execution time in seconds\n"
+                    )
                     f.write("# TYPE failover_actual_duration_seconds gauge\n")
-                    f.write(f'failover_actual_duration_seconds{{event_type="{event_type}",from="{from_iface}",to="{to_iface}"}} {actual_duration_seconds}\n')
+                    f.write(
+                        f'failover_actual_duration_seconds{{event_type="{event_type}",from="{from_iface}",to="{to_iface}"}} {actual_duration_seconds}\n'
+                    )
                     f.write("\n")
 
                 # Inter-event duration (for pattern analysis)
                 if inter_event_seconds is not None:
-                    f.write("# HELP failover_inter_event_seconds Time between consecutive failover events\n")
+                    f.write(
+                        "# HELP failover_inter_event_seconds Time between consecutive failover events\n"
+                    )
                     f.write("# TYPE failover_inter_event_seconds gauge\n")
-                    f.write(f'failover_inter_event_seconds{{event_type="{event_type}"}} {inter_event_seconds}\n')
+                    f.write(
+                        f'failover_inter_event_seconds{{event_type="{event_type}"}} {inter_event_seconds}\n'
+                    )
                     f.write("\n")
 
                 # Legacy compatibility metric
                 if actual_duration_seconds is not None:
-                    f.write("# HELP failover_last_duration_seconds Last failover duration (any type) - LEGACY\n")
+                    f.write(
+                        "# HELP failover_last_duration_seconds Last failover duration (any type) - LEGACY\n"
+                    )
                     f.write("# TYPE failover_last_duration_seconds gauge\n")
-                    f.write(f'failover_last_duration_seconds {actual_duration_seconds}\n')
+                    f.write(
+                        f"failover_last_duration_seconds {actual_duration_seconds}\n"
+                    )
 
             # Atomic replace (prevents Node Exporter reading partial file)
             tmp_file.replace(prom_file)
 
-            logger.info("Exported Prometheus metrics: actual=%sms, inter-event=%ss to %s", actual_duration_ms, inter_event_seconds, prom_file)
+            logger.info(
+                "Exported Prometheus metrics: actual=%sms, inter-event=%ss to %s",
+                actual_duration_ms,
+                inter_event_seconds,
+                prom_file,
+            )
 
         except OSError as e:
             logger.error("Error exporting Prometheus metric: %s", e, exc_info=True)
@@ -985,18 +1109,21 @@ class FailoverMetricsCollector:
             primary_latency, backup_latency = self.parse_detailed_metrics()
 
             # Insert or replace metrics summary (keep only last 7 days)
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT OR REPLACE INTO metrics_summary
                 (timestamp, primary_score, backup_score, primary_latency, backup_latency, active_interface)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                datetime.now(),
-                metrics.get('primary_score', 0),
-                metrics.get('backup_score', 0),
-                primary_latency,
-                backup_latency,
-                metrics.get('active_interface', PRIMARY_IFACE),
-            ))
+            """,
+                (
+                    datetime.now(),
+                    metrics.get("primary_score", 0),
+                    metrics.get("backup_score", 0),
+                    primary_latency,
+                    backup_latency,
+                    metrics.get("active_interface", PRIMARY_IFACE),
+                ),
+            )
 
             # Clean up old data (keep only 7 days)
             cursor.execute("""
@@ -1021,10 +1148,12 @@ class FailoverMetricsCollector:
         Returns a dict keyed by the actual interface name. Empty if collection
         fails for both interfaces.
         """
-        lib_dir = Path(os.getenv(
-            "FAILOVER_LIB_DIR",
-            "/usr/local/lib/linux-dual-wan-failover/lib",
-        ))
+        lib_dir = Path(
+            os.getenv(
+                "FAILOVER_LIB_DIR",
+                "/usr/local/lib/linux-dual-wan-failover/lib",
+            )
+        )
         common_sh = lib_dir / "common.sh"
         network_sh = lib_dir / "network.sh"
 
@@ -1052,7 +1181,9 @@ class FailoverMetricsCollector:
                     except json.JSONDecodeError as e:
                         logger.error(
                             "Failed to parse JSON from test_wan_quality for %s: %s",
-                            interface, e, exc_info=True,
+                            interface,
+                            e,
+                            exc_info=True,
                         )
                         logger.error(
                             "Invalid JSON output (first 200 chars): %s",
@@ -1061,7 +1192,8 @@ class FailoverMetricsCollector:
                 else:
                     logger.warning(
                         "test_wan_quality failed for %s: %s",
-                        interface, result.stderr,
+                        interface,
+                        result.stderr,
                     )
 
             except subprocess.TimeoutExpired:
@@ -1069,7 +1201,9 @@ class FailoverMetricsCollector:
             except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as e:
                 logger.error(
                     "Error collecting WAN quality for %s: %s",
-                    interface, e, exc_info=True,
+                    interface,
+                    e,
+                    exc_info=True,
                 )
 
         return quality_data
@@ -1101,21 +1235,24 @@ class FailoverMetricsCollector:
             cursor = conn.cursor()
 
             for interface, data in quality_data.items():
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO wan_quality_metrics
                     (timestamp, interface, latency_ms, packet_loss_pct, jitter_ms,
                      dns_time_ms, http_time_ms, overall_score)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    datetime.now(),
-                    interface,
-                    data.get('latency_ms'),
-                    data.get('packet_loss_pct'),
-                    data.get('jitter_ms'),
-                    data.get('dns_time_ms'),
-                    data.get('http_time_ms'),
-                    data.get('overall_score')
-                ))
+                """,
+                    (
+                        datetime.now(),
+                        interface,
+                        data.get("latency_ms"),
+                        data.get("packet_loss_pct"),
+                        data.get("jitter_ms"),
+                        data.get("dns_time_ms"),
+                        data.get("http_time_ms"),
+                        data.get("overall_score"),
+                    ),
+                )
 
             # Clean up old data (keep only 7 days)
             cursor.execute("""
@@ -1126,12 +1263,16 @@ class FailoverMetricsCollector:
             conn.commit()
             conn.close()
 
-            logger.info("Saved WAN quality metrics for %d interfaces", len(quality_data))
+            logger.info(
+                "Saved WAN quality metrics for %d interfaces", len(quality_data)
+            )
 
         except sqlite3.Error as e:
             logger.error("Error saving WAN quality metrics: %s", e, exc_info=True)
 
-    def export_wan_quality_prometheus(self, quality_data: dict[str, dict[str, Any]]) -> None:
+    def export_wan_quality_prometheus(
+        self, quality_data: dict[str, dict[str, Any]]
+    ) -> None:
         """
         Export WAN quality metrics to Prometheus textfile collector.
 
@@ -1153,53 +1294,73 @@ class FailoverMetricsCollector:
             prom_file = prom_dir / "wan_quality.prom"
             tmp_file = prom_file.with_suffix(".tmp")
 
-            with open(tmp_file, 'w') as f:
+            with open(tmp_file, "w") as f:
                 # Latency
-                f.write("# HELP wan_latency_milliseconds WAN interface latency in milliseconds\n")
+                f.write(
+                    "# HELP wan_latency_milliseconds WAN interface latency in milliseconds\n"
+                )
                 f.write("# TYPE wan_latency_milliseconds gauge\n")
                 for interface, data in quality_data.items():
                     iface_type = self._interface_role(interface)
-                    latency = data.get('latency_ms', 999.99)
-                    f.write(f'wan_latency_milliseconds{{interface="{interface}",type="{iface_type}"}} {latency}\n')
+                    latency = data.get("latency_ms", 999.99)
+                    f.write(
+                        f'wan_latency_milliseconds{{interface="{interface}",type="{iface_type}"}} {latency}\n'
+                    )
                 f.write("\n")
 
                 # Packet Loss
-                f.write("# HELP wan_packet_loss_percent WAN interface packet loss percentage\n")
+                f.write(
+                    "# HELP wan_packet_loss_percent WAN interface packet loss percentage\n"
+                )
                 f.write("# TYPE wan_packet_loss_percent gauge\n")
                 for interface, data in quality_data.items():
-                    loss = data.get('packet_loss_pct', 100)
-                    f.write(f'wan_packet_loss_percent{{interface="{interface}"}} {loss}\n')
+                    loss = data.get("packet_loss_pct", 100)
+                    f.write(
+                        f'wan_packet_loss_percent{{interface="{interface}"}} {loss}\n'
+                    )
                 f.write("\n")
 
                 # Jitter
-                f.write("# HELP wan_jitter_milliseconds WAN interface jitter in milliseconds\n")
+                f.write(
+                    "# HELP wan_jitter_milliseconds WAN interface jitter in milliseconds\n"
+                )
                 f.write("# TYPE wan_jitter_milliseconds gauge\n")
                 for interface, data in quality_data.items():
-                    jitter = data.get('jitter_ms', 999.99)
-                    f.write(f'wan_jitter_milliseconds{{interface="{interface}"}} {jitter}\n')
+                    jitter = data.get("jitter_ms", 999.99)
+                    f.write(
+                        f'wan_jitter_milliseconds{{interface="{interface}"}} {jitter}\n'
+                    )
                 f.write("\n")
 
                 # DNS Performance
-                f.write("# HELP wan_dns_time_milliseconds DNS resolution time in milliseconds\n")
+                f.write(
+                    "# HELP wan_dns_time_milliseconds DNS resolution time in milliseconds\n"
+                )
                 f.write("# TYPE wan_dns_time_milliseconds gauge\n")
                 for interface, data in quality_data.items():
-                    dns_time = data.get('dns_time_ms', 999)
-                    f.write(f'wan_dns_time_milliseconds{{interface="{interface}"}} {dns_time}\n')
+                    dns_time = data.get("dns_time_ms", 999)
+                    f.write(
+                        f'wan_dns_time_milliseconds{{interface="{interface}"}} {dns_time}\n'
+                    )
                 f.write("\n")
 
                 # HTTP Performance
-                f.write("# HELP wan_http_time_milliseconds HTTP check time in milliseconds\n")
+                f.write(
+                    "# HELP wan_http_time_milliseconds HTTP check time in milliseconds\n"
+                )
                 f.write("# TYPE wan_http_time_milliseconds gauge\n")
                 for interface, data in quality_data.items():
-                    http_time = data.get('http_time_ms', 999)
-                    f.write(f'wan_http_time_milliseconds{{interface="{interface}"}} {http_time}\n')
+                    http_time = data.get("http_time_ms", 999)
+                    f.write(
+                        f'wan_http_time_milliseconds{{interface="{interface}"}} {http_time}\n'
+                    )
                 f.write("\n")
 
                 # Overall Quality Score
                 f.write("# HELP wan_quality_score Overall WAN quality score (0-100)\n")
                 f.write("# TYPE wan_quality_score gauge\n")
                 for interface, data in quality_data.items():
-                    score = data.get('overall_score', 0)
+                    score = data.get("overall_score", 0)
                     f.write(f'wan_quality_score{{interface="{interface}"}} {score}\n')
 
             # Atomic replace (prevents Node Exporter reading partial file)
@@ -1208,7 +1369,9 @@ class FailoverMetricsCollector:
             logger.info("Exported WAN quality metrics to %s", prom_file)
 
         except OSError as e:
-            logger.error("Error exporting WAN quality Prometheus metrics: %s", e, exc_info=True)
+            logger.error(
+                "Error exporting WAN quality Prometheus metrics: %s", e, exc_info=True
+            )
 
     def collect_dns_detailed(self) -> dict[str, dict[str, Any]]:
         """
@@ -1221,10 +1384,12 @@ class FailoverMetricsCollector:
         and quality score. Returns an empty dict if collection fails for
         both interfaces.
         """
-        lib_dir = Path(os.getenv(
-            "FAILOVER_LIB_DIR",
-            "/usr/local/lib/linux-dual-wan-failover/lib",
-        ))
+        lib_dir = Path(
+            os.getenv(
+                "FAILOVER_LIB_DIR",
+                "/usr/local/lib/linux-dual-wan-failover/lib",
+            )
+        )
         common_sh = lib_dir / "common.sh"
         network_sh = lib_dir / "network.sh"
 
@@ -1253,7 +1418,9 @@ class FailoverMetricsCollector:
             except json.JSONDecodeError as e:
                 logger.error(
                     "Failed to parse JSON from measure_dns_detailed for %s: %s",
-                    interface, e, exc_info=True,
+                    interface,
+                    e,
+                    exc_info=True,
                 )
                 logger.error(
                     "Invalid JSON output (first 200 chars): %s",
@@ -1262,7 +1429,9 @@ class FailoverMetricsCollector:
             except (subprocess.SubprocessError, OSError) as e:
                 logger.error(
                     "Error collecting detailed DNS metrics for %s: %s",
-                    interface, e, exc_info=True,
+                    interface,
+                    e,
+                    exc_info=True,
                 )
 
         return dns_data
@@ -1286,26 +1455,31 @@ class FailoverMetricsCollector:
 
             for interface, data in dns_data.items():
                 # Extract resolver-specific times
-                resolvers = {r['resolver']: r['avg_time_ms'] for r in data.get('resolvers', [])}
+                resolvers = {
+                    r["resolver"]: r["avg_time_ms"] for r in data.get("resolvers", [])
+                }
 
-                cursor.execute('''
+                cursor.execute(
+                    """
                     INSERT INTO dns_performance_metrics
                     (timestamp, interface, success_rate_pct, total_queries, successful_queries,
                      timeouts, servfails, dns_quality_score, google_dns_time_ms,
                      cloudflare_dns_time_ms, isp_dns_time_ms)
                     VALUES (datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    interface,
-                    data.get('success_rate_pct', 0),
-                    data.get('total_queries', 0),
-                    data.get('successful_queries', 0),
-                    data.get('timeouts', 0),
-                    data.get('servfails', 0),
-                    data.get('dns_quality_score', 0),
-                    resolvers.get('8.8.8.8', 999),
-                    resolvers.get('1.1.1.1', 999),
-                    resolvers.get('192.0.2.1', 999)
-                ))
+                """,
+                    (
+                        interface,
+                        data.get("success_rate_pct", 0),
+                        data.get("total_queries", 0),
+                        data.get("successful_queries", 0),
+                        data.get("timeouts", 0),
+                        data.get("servfails", 0),
+                        data.get("dns_quality_score", 0),
+                        resolvers.get("8.8.8.8", 999),
+                        resolvers.get("1.1.1.1", 999),
+                        resolvers.get("192.0.2.1", 999),
+                    ),
+                )
 
             # Clean up old data (keep only 7 days)
             cursor.execute("""
@@ -1317,9 +1491,13 @@ class FailoverMetricsCollector:
             conn.close()
             logger.debug("Saved detailed DNS metrics for %d interfaces", len(dns_data))
         except sqlite3.Error as e:
-            logger.error("Error saving detailed DNS metrics to database: %s", e, exc_info=True)
+            logger.error(
+                "Error saving detailed DNS metrics to database: %s", e, exc_info=True
+            )
 
-    def export_dns_detailed_prometheus(self, dns_data: dict[str, dict[str, Any]]) -> None:
+    def export_dns_detailed_prometheus(
+        self, dns_data: dict[str, dict[str, Any]]
+    ) -> None:
         """
         Export detailed DNS metrics to Prometheus textfile collector.
 
@@ -1339,14 +1517,18 @@ class FailoverMetricsCollector:
             prom_file = prom_dir / "dns_performance.prom"
             tmp_file = prom_file.with_suffix(".tmp")
 
-            with open(tmp_file, 'w') as f:
+            with open(tmp_file, "w") as f:
                 # DNS Success Rate
-                f.write("# HELP dns_success_rate_percent DNS query success rate percentage\n")
+                f.write(
+                    "# HELP dns_success_rate_percent DNS query success rate percentage\n"
+                )
                 f.write("# TYPE dns_success_rate_percent gauge\n")
                 for interface, data in dns_data.items():
                     iface_type = self._interface_role(interface)
-                    success_rate = data.get('success_rate_pct', 0)
-                    f.write(f'dns_success_rate_percent{{interface="{interface}",type="{iface_type}"}} {success_rate}\n')
+                    success_rate = data.get("success_rate_pct", 0)
+                    f.write(
+                        f'dns_success_rate_percent{{interface="{interface}",type="{iface_type}"}} {success_rate}\n'
+                    )
 
                 f.write("\n")
 
@@ -1354,10 +1536,14 @@ class FailoverMetricsCollector:
                 f.write("# HELP dns_failures_total Total DNS query failures by type\n")
                 f.write("# TYPE dns_failures_total counter\n")
                 for interface, data in dns_data.items():
-                    timeouts = data.get('timeouts', 0)
-                    servfails = data.get('servfails', 0)
-                    f.write(f'dns_failures_total{{interface="{interface}",type="timeout"}} {timeouts}\n')
-                    f.write(f'dns_failures_total{{interface="{interface}",type="servfail"}} {servfails}\n')
+                    timeouts = data.get("timeouts", 0)
+                    servfails = data.get("servfails", 0)
+                    f.write(
+                        f'dns_failures_total{{interface="{interface}",type="timeout"}} {timeouts}\n'
+                    )
+                    f.write(
+                        f'dns_failures_total{{interface="{interface}",type="servfail"}} {servfails}\n'
+                    )
 
                 f.write("\n")
 
@@ -1365,28 +1551,40 @@ class FailoverMetricsCollector:
                 f.write("# HELP dns_quality_score DNS-specific quality score (0-100)\n")
                 f.write("# TYPE dns_quality_score gauge\n")
                 for interface, data in dns_data.items():
-                    score = data.get('dns_quality_score', 0)
+                    score = data.get("dns_quality_score", 0)
                     f.write(f'dns_quality_score{{interface="{interface}"}} {score}\n')
 
                 f.write("\n")
 
                 # Resolver Comparison
-                f.write("# HELP dns_resolver_time_milliseconds DNS resolution time by resolver\n")
+                f.write(
+                    "# HELP dns_resolver_time_milliseconds DNS resolution time by resolver\n"
+                )
                 f.write("# TYPE dns_resolver_time_milliseconds gauge\n")
                 for interface, data in dns_data.items():
-                    for resolver_data in data.get('resolvers', []):
-                        resolver = resolver_data['resolver']
-                        time_ms = resolver_data['avg_time_ms']
+                    for resolver_data in data.get("resolvers", []):
+                        resolver = resolver_data["resolver"]
+                        time_ms = resolver_data["avg_time_ms"]
                         # Resolver labels: google, cloudflare, isp
-                        resolver_label = "google" if resolver == "8.8.8.8" else "cloudflare" if resolver == "1.1.1.1" else "isp"
-                        f.write(f'dns_resolver_time_milliseconds{{interface="{interface}",resolver="{resolver_label}",resolver_ip="{resolver}"}} {time_ms}\n')
+                        resolver_label = (
+                            "google"
+                            if resolver == "8.8.8.8"
+                            else "cloudflare"
+                            if resolver == "1.1.1.1"
+                            else "isp"
+                        )
+                        f.write(
+                            f'dns_resolver_time_milliseconds{{interface="{interface}",resolver="{resolver_label}",resolver_ip="{resolver}"}} {time_ms}\n'
+                        )
 
             # Atomic replace (prevents Node Exporter reading partial file)
             tmp_file.replace(prom_file)
 
             logger.debug("Exported detailed DNS Prometheus metrics to %s", prom_file)
         except OSError as e:
-            logger.error("Error exporting detailed DNS Prometheus metrics: %s", e, exc_info=True)
+            logger.error(
+                "Error exporting detailed DNS Prometheus metrics: %s", e, exc_info=True
+            )
 
     def _graceful_shutdown(self, signum: int, frame) -> None:
         """
@@ -1473,8 +1671,10 @@ class FailoverMetricsCollector:
                     if iteration % METRICS_SUMMARY_INTERVAL == 0:
                         logger.info(
                             "Status: %s=%s%% %s=%s%% active=%s",
-                            metrics["primary_iface"], metrics["primary_score"],
-                            metrics["backup_iface"], metrics["backup_score"],
+                            metrics["primary_iface"],
+                            metrics["primary_score"],
+                            metrics["backup_iface"],
+                            metrics["backup_score"],
                             metrics["active_interface"],
                         )
 

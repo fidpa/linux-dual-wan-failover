@@ -44,8 +44,12 @@ PrivateTmp=yes
 CapabilityBoundingSet=CAP_KILL CAP_NET_ADMIN
 AmbientCapabilities=CAP_KILL CAP_NET_ADMIN
 
+# Event listener (NetworkManager state changes). Mostly idle, but must wake
+# up and send SIGUSR1 within milliseconds when an event fires. CPUQuota=20%
+# was tight enough to add latency in tests. 50 % is comfortable for the
+# event-handling bursts; remove the quota entirely on a dedicated box.
 MemoryMax=50M
-CPUQuota=20%
+CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target

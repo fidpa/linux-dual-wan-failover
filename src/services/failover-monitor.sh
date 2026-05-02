@@ -22,7 +22,7 @@ readonly SCRIPT_DIR
 LIB_DIR="${LIB_DIR:-${SCRIPT_DIR}/../lib}"
 readonly LIB_DIR
 
-readonly SCRIPT_VERSION="0.1.0-prep"
+readonly SCRIPT_VERSION="0.1.1"
 readonly PID_FILE="${PID_FILE:-/run/failover-monitor.pid}"
 
 # ---- Library imports --------------------------------------------------------
@@ -80,7 +80,9 @@ PRIMARY_IFACE="${PRIMARY_IFACE:-eth0}"
 BACKUP_IFACE="${BACKUP_IFACE:-lte0}"
 
 # Network test targets (required by performance.sh)
+# shellcheck disable=SC2034 # consumed by sourced lib/performance.sh
 CHECK_IPS=("8.8.8.8" "1.1.1.1" "9.9.9.9" "208.67.222.222")
+# shellcheck disable=SC2034 # consumed by sourced lib/performance.sh
 DNS_SERVERS=("8.8.8.8" "1.1.1.1")
 
 # Monitoring intervals
@@ -146,7 +148,9 @@ last_prolonged_backup_alert=0
 
 # State variables
 declare -gA connection_scores
+# shellcheck disable=SC2034 # legacy state, kept for compat with debug dumps
 declare -gA failure_counts
+# shellcheck disable=SC2034 # legacy state, kept for compat with debug dumps
 declare -gA recovery_counts
 declare -gA consecutive_failures  # NEW: Track consecutive failures for FAILURE_THRESHOLD
 declare -gA consecutive_recoveries  # NEW: Track consecutive recoveries for RECOVERY_THRESHOLD
@@ -792,6 +796,7 @@ perform_failover() {
     # Execute route changes FIRST (via routing.sh module)
     if safe_route_change "$to_interface" "$from_interface"; then
         # SUCCESS: Now update timestamp (after successful route change)
+        # shellcheck disable=SC2034 # state retained for debug dumps / future hooks
         last_failover_time="$current_time"
         last_failover_mono=$(get_monotonic_time)  # v4.6.1 FIX M3: Monotonic for anti-flapping
         # v4.6.1 FIX H4: Use atomic save_state instead of echo > file
@@ -874,6 +879,32 @@ check_failover_conditions() {
     eth0_score=$(get_connection_score "$PRIMARY_IFACE")
     local lte0_score
     lte0_score=$(get_connection_score "$BACKUP_IFACE")
+
+    # Carrier-aware pre-check (Layer-1 authority, bypasses score logic).
+    # If primary has no carrier (cable unplugged, modem powered off) and the
+    # backup is at least physically up with score > 0 (not quota-blocked),
+    # force an unconditional failover. Score heuristics are irrelevant when
+    # primary is dead at Layer 1 — and an exact-threshold backup score
+    # (e.g. 25 from an end-to-end DNS penalty) would otherwise be classified
+    # as "backup not viable" by every score-based path. The score>0 guard
+    # preserves the LAST_RESORT quota-cap protection.
+    if [[ "$current_wan" == "primary" ]]; then
+        local primary_carrier backup_carrier
+        primary_carrier=$(cat "/sys/class/net/${PRIMARY_IFACE}/carrier" 2>/dev/null || echo "1")
+        backup_carrier=$(cat "/sys/class/net/${BACKUP_IFACE}/carrier" 2>/dev/null || echo "0")
+
+        if [[ "$primary_carrier" == "0" ]] && [[ "$backup_carrier" == "1" ]] && [[ $lte0_score -gt 0 ]]; then
+            log_warning "PRIMARY NO CARRIER: $PRIMARY_IFACE Layer-1 dead, $BACKUP_IFACE viable (carrier=1, score=$lte0_score) — forcing failover (bypass score logic)"
+            send_notification \
+"FAILOVER (carrier pre-check) — primary Layer-1 down
+$PRIMARY_IFACE: carrier=0
+$BACKUP_IFACE: carrier=1, score=$lte0_score
+Score logic bypassed (anti-stall)" \
+                "warning" || true
+            perform_failover "$PRIMARY_IFACE" "$BACKUP_IFACE" "primary_no_carrier"
+            return 0
+        fi
+    fi
 
     # v4.5.0: Critical packet loss check - bypasses score-based logic
     if [[ "$current_wan" == "primary" ]] && is_critical_packet_loss "$PRIMARY_IFACE"; then

@@ -52,10 +52,15 @@ PrivateTmp=yes
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
-# Resource limits
+# Resource limits.
+# The orchestrator runs many short-lived bash subshells in parallel during a
+# scoring round. We measured ~44 % throttling at CPUQuota=50% on a Pi 5,
+# which delayed score updates and therefore failover/failback decisions.
+# 75 % gives generous headroom for bursty parallel tests. On a dedicated
+# router box, remove CPUQuota entirely.
 MemoryMax=100M
 MemoryHigh=80M
-CPUQuota=50%
+CPUQuota=75%
 
 [Install]
 WantedBy=multi-user.target

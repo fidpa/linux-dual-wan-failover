@@ -45,8 +45,16 @@ PrivateTmp=yes
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
+# Route Guardian is a real-time safety net: short bursts of `ip route` and
+# conntrack work, with a sub-second monitor loop. Tight CPU quotas can delay
+# the cleanup window long enough for stale routes to leak. We measured ~98 %
+# throttling at CPUQuota=10% on a Pi 5, even though absolute usage was only
+# a few percent — the bursts were just denser than the quota window.
+#
+# 50 % gives plenty of headroom for bursty cleanup work. On a dedicated
+# router box, remove CPUQuota entirely to let the kernel scheduler decide.
 MemoryMax=100M
-CPUQuota=10%
+CPUQuota=50%
 
 [Install]
 WantedBy=multi-user.target

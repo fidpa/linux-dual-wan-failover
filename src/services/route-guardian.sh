@@ -12,6 +12,7 @@
 #
 set -uo pipefail
 
+# shellcheck disable=SC2034 # consumed by sourced lib/common.sh logging
 SCRIPT_NAME="route-guardian"
 
 # ---- Configuration ----------------------------------------------------------
@@ -94,6 +95,7 @@ chmod 644 "$LOG_FILE"
 
 # Optional secrets file (used by alerting plugins that need webhook URLs etc.).
 # Default: empty — set FAILOVER_SECRETS_FILE to enable.
+# shellcheck disable=SC2034 # exported via env for sourced alerting plugins
 readonly SECRETS_FILE="${FAILOVER_SECRETS_FILE:-}"
 
 # ---- Library imports --------------------------------------------------------
@@ -579,7 +581,7 @@ add_missing_route() {
     local interface="$1"
     local gateway="$2"
     local metric="$3"
-    
+
     # Rate limiting check
     if [[ -f "$REPAIR_LOCKFILE" ]]; then
         local current_time
@@ -593,14 +595,14 @@ add_missing_route() {
             return 1
         fi
     fi
-    
+
     # Verify the gateway is reachable before installing the route.
     if ! test_gateway_reachable "$gateway" "$interface"; then
         log_message "ERROR" "REPAIR" "Skipping route addition - gateway $gateway unreachable via $interface"
         increment_failure_count
         return 1
     fi
-    
+
     # Try to add the route
     log_message "INFO" "REPAIR" "Adding missing route: default via $gateway dev $interface metric $metric"
     if ip route add default via "$gateway" dev "$interface" metric "$metric" 2>/dev/null; then
@@ -632,18 +634,18 @@ backup_networkmanager_connection() {
     local timestamp
     timestamp=$(date +%Y%m%d_%H%M%S)
     local backup_file="${backup_dir}/${connection_name}_${timestamp}.backup"
-    
+
     # Create backup directory if it doesn't exist
     mkdir -p "$backup_dir"
-    
+
     log_message "INFO" "NETMGR" "Creating backup of connection: $connection_name"
-    
+
     if nmcli connection show "$connection_name" > "$backup_file" 2>/dev/null; then
         log_message "SUCCESS" "NETMGR" "Connection backup created: $backup_file"
-        
+
         # Keep only last 5 backups for this connection
         ls -t "${backup_dir}/${connection_name}_"*.backup 2>/dev/null | tail -n +6 | xargs -r rm
-        
+
         return 0
     else
         log_message "ERROR" "NETMGR" "Failed to create connection backup"
@@ -654,12 +656,12 @@ backup_networkmanager_connection() {
 # v2.0 NEW: Check NetworkManager configuration (never-default + route metrics)
 check_networkmanager_configuration() {
     log_message "INFO" "NETMGR" "Checking NetworkManager configuration (never-default + route metrics)"
-    
+
     if ! command -v nmcli &>/dev/null; then
         log_message "WARNING" "NETMGR" "NetworkManager CLI not available - skipping checks"
         return 1
     fi
-    
+
     # Define expected metrics per connection type (active_wan-aware)
     local expected_primary_metric
     expected_primary_metric=$(get_expected_primary_metric)
@@ -667,32 +669,32 @@ check_networkmanager_configuration() {
         ["$WAN_PRIMARY_CONNECTION"]="$expected_primary_metric"  # 50 normal, 500 during failover
         ["$LTE_CONNECTION"]="200"                               # LTE always backup
     )
-    
+
     # Check each WAN connection
     for connection in "$WAN_PRIMARY_CONNECTION" "$LTE_CONNECTION"; do
         log_message "DEBUG" "NETMGR" "Checking connection: $connection"
-        
+
         # Get connection settings
         local never_default
         never_default=$(nmcli -t -f ipv4.never-default connection show "$connection" 2>/dev/null | cut -d: -f2)
         local route_metric
         route_metric=$(nmcli -t -f ipv4.route-metric connection show "$connection" 2>/dev/null | cut -d: -f2)
         local expected_metric="${expected_metrics[$connection]}"
-        
+
         # Check never-default setting
         case "$connection" in
             "$WAN_PRIMARY_CONNECTION")
                 if [[ "$never_default" == "yes" ]]; then
                     log_message "CRITICAL" "NETMGR" "$connection has never-default=yes - blocks internet access!"
                     send_alert "NETWORKMANAGER_CRITICAL" "WAN-Primary misconfigured!" "Connection needs never-default=no" &
-                    
+
                     # Auto-repair never-default issue
                     log_message "INFO" "NETMGR" "Auto-repairing never-default configuration..."
                     backup_networkmanager_connection "$connection"
-                    
+
                     if nmcli connection modify "$connection" ipv4.never-default no 2>/dev/null; then
                         log_message "SUCCESS" "NETMGR" "Auto-repair successful: never-default=no"
-                        
+
                         # Reactivate connection
                         if nmcli connection down "$connection" 2>/dev/null && sleep 2 && nmcli connection up "$connection" 2>/dev/null; then
                             log_message "SUCCESS" "NETMGR" "Connection reactivated successfully"
@@ -709,16 +711,16 @@ check_networkmanager_configuration() {
                     log_message "DEBUG" "NETMGR" "$connection never-default configuration OK: $never_default"
                 fi
                 ;;
-                
+
             "$LTE_CONNECTION")
                 if [[ "$never_default" != "yes" ]]; then
                     log_message "WARNING" "NETMGR" "$connection should have never-default=yes to prevent auto-routes"
                     send_alert "NETWORKMANAGER_WARNING" "LTE connection config issue" "Should have never-default=yes" &
-                    
+
                     # Auto-repair LTE never-default
                     log_message "INFO" "NETMGR" "Auto-repairing LTE never-default configuration..."
                     backup_networkmanager_connection "$connection"
-                    
+
                     if nmcli connection modify "$connection" ipv4.never-default yes 2>/dev/null; then
                         log_message "SUCCESS" "NETMGR" "LTE auto-repair successful: never-default=yes"
                         increment_success_count
@@ -731,7 +733,7 @@ check_networkmanager_configuration() {
                 fi
                 ;;
         esac
-        
+
             # Check route metric settings
         if [[ -n "$route_metric" && "$route_metric" != "$expected_metric" ]]; then
             log_message "WARNING" "NETMGR" "$connection metric mismatch: $route_metric (expected: $expected_metric, active_wan: $(cat /run/linux-dual-wan-failover/wan-state/active_wan 2>/dev/null))"
@@ -766,36 +768,36 @@ check_networkmanager_never_default() {
 # v2.0 NEW: Detect metric conflicts with automatic cleanup
 detect_metric_conflicts() {
     log_message "INFO" "CONFLICT" "Checking for route metric conflicts"
-    
+
     # Get all default routes with their details
     local routes_raw
     routes_raw=$(ip route show | grep "^default via")
     local -A metric_routes
     local conflict_found=false
-    
+
     # Parse routes and group by metric
     while IFS= read -r route; do
         [[ -n "$route" ]] || continue
         local metric
         metric=$(grep -o "metric [0-9]*" <<< "$route" | awk '{print $2}')
         [[ -n "$metric" ]] || continue
-        
+
         if [[ -n "${metric_routes[$metric]:-}" ]]; then
             log_message "ERROR" "CONFLICT" "Metric conflict detected: Multiple routes with metric $metric"
             log_message "INFO" "CONFLICT" "Conflicting routes: ${metric_routes[$metric]} AND $route"
             conflict_found=true
-            
+
             # Auto-cleanup logic for known conflicts
             cleanup_conflicting_routes "$metric" "${metric_routes[$metric]}" "$route"
         else
             metric_routes[$metric]="$route"
         fi
     done <<< "$routes_raw"
-    
+
     if [[ "$conflict_found" == "false" ]]; then
         log_message "DEBUG" "CONFLICT" "No metric conflicts detected"
     fi
-    
+
     # v2.1 NEW: Preventive monitoring for potential issues
     check_preventive_issues
     return 0
@@ -806,13 +808,13 @@ cleanup_conflicting_routes() {
     local metric="$1"
     local route1="$2"
     local route2="$3"
-    
+
     log_message "INFO" "CLEANUP" "Starting automatic cleanup for metric $metric conflicts"
-    
+
     # the failover host metric standards (from GLOSSAR.md):
     # DSL should be metric 50, LTE should be metric 200
     # NetworkManager DHCP routes typically use metric 100
-    
+
     case "$metric" in
         "100")
             # Handle metric 100 conflicts (common with NetworkManager DHCP + manual routes)
@@ -823,7 +825,7 @@ cleanup_conflicting_routes() {
             elif echo "$route2" | grep -q "dev $LTE_INTERFACE.*$LTE_GATEWAY"; then
                 lte_route_found="$route2"
             fi
-            
+
             # Remove LTE route with wrong metric 100 (should be 200)
             if [[ -n "$lte_route_found" ]]; then
                 log_message "WARNING" "CLEANUP" "Removing LTE route with incorrect metric 100 (should be 200)"
@@ -831,7 +833,7 @@ cleanup_conflicting_routes() {
                 gateway=$(awk '{print $3}' <<< "$lte_route_found")
                 local interface
                 interface=$(grep -o "dev [^ ]*" <<< "$lte_route_found" | awk '{print $2}')
-                
+
                 if ip route del default via "$gateway" dev "$interface" metric 100 2>/dev/null; then
                     log_message "SUCCESS" "CLEANUP" "Removed incorrect LTE route: $lte_route_found"
                     send_alert "ROUTE_CLEANUP" "✅ Metric conflict resolved" "Removed LTE ($LTE_INTERFACE) route with wrong metric 100" &
@@ -852,14 +854,14 @@ cleanup_conflicting_routes() {
                 fi
             fi
             ;;
-            
+
         "50"|"200")
             # These are correct metrics - investigate why we have duplicates
             log_message "WARNING" "CLEANUP" "Conflict in expected metric range ($metric) - manual investigation needed"
             log_message "INFO" "CLEANUP" "Routes: $route1 | $route2"
             send_alert "ROUTE_CONFLICT_MANUAL" "⚠️ Manual route conflict" "Metric $metric has duplicates - check manually" &
             ;;
-            
+
         *)
             # Unknown metric conflict
             log_message "WARNING" "CLEANUP" "Unknown metric conflict ($metric) - logging for analysis"
@@ -935,13 +937,13 @@ Removed: metric $metric" &
 check_preventive_issues() {
     local route_count
     route_count=$(ip route show | grep -c "^default via")
-    
+
     # Preventive Alert: Too many default routes
     if [[ $route_count -gt 3 ]]; then
         log_message "WARNING" "PREVENTIVE" "High default route count: $route_count routes detected"
         send_preventive_alert "HIGH_ROUTE_COUNT" "⚠️ High default route count" "Found $route_count routes - may cause conflicts"
     fi
-    
+
     # Preventive Alert: NetworkManager metric drift detection
     local wan_metric
     wan_metric=$(nmcli -t -f ipv4.route-metric connection show "$WAN_PRIMARY_CONNECTION" 2>/dev/null | cut -d: -f2)
@@ -949,7 +951,7 @@ check_preventive_issues() {
         log_message "WARNING" "PREVENTIVE" "WAN-Primary using metric 100 - conflict risk with NetworkManager DHCP"
         send_preventive_alert "WAN_METRIC_RISK" "⚠️ WAN Metric conflict risk" "WAN-Primary metric=100 may cause DHCP route conflicts"
     fi
-    
+
     # Preventive Alert: Multiple routes per interface
     local eth0_routes
     eth0_routes=$(ip route show | grep -c "^default via.*dev eth0")
@@ -1189,12 +1191,12 @@ dmesg | grep -i usb | tail -20
 # v2.0 NEW: Check local subnet routes
 check_local_subnet_routes() {
     log_message "INFO" "SUBNET" "Checking local subnet routes"
-    
+
     local subnets=(
         "$LAN_SUBNET:$LAN_INTERFACE"
         "$MGMT_SUBNET:$MGMT_INTERFACE"
     )
-    
+
     for subnet_def in "${subnets[@]}"; do
         local subnet="${subnet_def%:*}"
         local interface="${subnet_def#*:}"
@@ -1262,12 +1264,14 @@ monitor_default_routes() {
             # Only repair if gateway is reachable
             if test_gateway_reachable "$DSL_GATEWAY" "$DSL_INTERFACE"; then
                 # Remove any existing DSL default routes with wrong metric
-                while ip route del default dev "$DSL_INTERFACE" 2>/dev/null; do true; done
+                while ip route del default dev "$DSL_INTERFACE" 2>/dev/null; do
+                    :
+                done
                 add_missing_route "$DSL_INTERFACE" "$DSL_GATEWAY" "$expected_metric"
             fi
         fi
     fi
-    
+
     # v3.3.0: Check LTE interface and route (ONLY if LTE available)
     if [[ "$LTE_AVAILABLE" == "true" ]]; then
         if check_interface_status "$LTE_INTERFACE"; then
@@ -1323,7 +1327,46 @@ monitor_default_routes() {
 
     # Count total routes
     local total_routes
-    total_routes=$(ip route show | grep -c "^default via")
+    total_routes=$(ip route show | grep -c "^default via" || echo "0")
+    [[ "$total_routes" =~ ^[0-9]+$ ]] || total_routes=0
+
+    # Default-route vacuum detection (anti-failover-stall safety net).
+    # If neither primary nor backup has registered a default route, the
+    # routing table is in a vacuum state — independent of active_wan or
+    # score heuristics. This can happen in failover-stall edge cases when
+    # the orchestrator detected the failure but failed to install the
+    # backup route (e.g. _swap_primary_metric failed before the carrier
+    # check was added in routing.sh). Emergency restore prefers the backup
+    # (typical when primary is Layer-1 dead), with primary as fallback.
+    # The lockfile coordination above still pauses this loop during
+    # legitimate failover transitions, so there is no race with the
+    # orchestrator.
+    if [[ "$total_routes" -eq 0 ]]; then
+        log_message "CRITICAL" "VACUUM" "Routing vacuum detected: no default route in main table"
+
+        if [[ "$LTE_AVAILABLE" == "true" ]] \
+           && check_interface_status "$LTE_INTERFACE" \
+           && test_gateway_reachable "$LTE_GATEWAY" "$LTE_INTERFACE"; then
+            log_message "WARNING" "VACUUM" "Emergency restore: default via $LTE_GATEWAY dev $LTE_INTERFACE metric 200"
+            send_alert "ROUTE_VACUUM_RECOVERED" \
+                "🚨 Routing vacuum recovered via backup" \
+                "No default route in main table. $LTE_INTERFACE functional → default via $LTE_GATEWAY dev $LTE_INTERFACE restored." &
+            add_missing_route "$LTE_INTERFACE" "$LTE_GATEWAY" 200
+        elif check_interface_status "$DSL_INTERFACE" \
+             && test_gateway_reachable "$DSL_GATEWAY" "$DSL_INTERFACE"; then
+            log_message "WARNING" "VACUUM" "Emergency restore: default via $DSL_GATEWAY dev $DSL_INTERFACE metric 50"
+            send_alert "ROUTE_VACUUM_RECOVERED" \
+                "🚨 Routing vacuum recovered via primary" \
+                "No default route in main table. $DSL_INTERFACE functional → default via $DSL_GATEWAY dev $DSL_INTERFACE restored." &
+            add_missing_route "$DSL_INTERFACE" "$DSL_GATEWAY" 50
+        else
+            log_message "CRITICAL" "VACUUM" "Routing vacuum + no functional WAN — manual intervention required"
+            send_alert "ROUTE_VACUUM_CRITICAL" \
+                "🚨 Routing vacuum + no functional WAN" \
+                "No default route, neither $DSL_INTERFACE nor $LTE_INTERFACE reachable — manual intervention required!" &
+        fi
+    fi
+
     log_message "INFO" "STATUS" "Route status: DSL=$dsl_ok, LTE=${LTE_AVAILABLE}:${lte_ok}, Total routes=$total_routes"
     return 0
 }
@@ -1331,17 +1374,17 @@ monitor_default_routes() {
 # v2.0 NEW: Comprehensive route health check
 comprehensive_route_health_check() {
     log_message "INFO" "HEALTH" "Starting comprehensive route health check"
-    
+
     # 1. Check default routes (v1.6 compatibility)
     # v2.2 NEW: Check for duplicate routes on same interface
     cleanup_interface_duplicate_routes "$DSL_INTERFACE" || true
     cleanup_interface_duplicate_routes "$LTE_INTERFACE" || true
 
     monitor_default_routes
-    
+
     # 2. NEW: Check local subnet routes
     check_local_subnet_routes
-    
+
     # 3. NEW: Check NetworkManager configuration
     check_networkmanager_configuration
 
@@ -1383,12 +1426,12 @@ _print_local_subnet_status() {
 # Status command with JSON support
 show_status() {
     local output_format="${1:-human}"
-    
+
     if [[ "$output_format" == "json" ]]; then
         generate_json_status
         return
     fi
-    
+
     # Human-readable format
     echo "Route Guardian Status Report"
     echo "================================="
@@ -1407,18 +1450,18 @@ show_status() {
             echo "  $iface: DOWN ✗"
         fi
     done
-    
+
     echo ""
     echo "Default Routes:"
     ip route show | grep "^default via" | while read -r route; do
         echo "  $route"
     done
-    
+
     echo ""
     echo "Local Subnet Routes:"
     _print_local_subnet_status "LAN " "$LAN_SUBNET" "$LAN_INTERFACE"
     _print_local_subnet_status "MGMT" "$MGMT_SUBNET" "$MGMT_INTERFACE"
-    
+
     echo ""
     if [[ -f "$REPAIR_SUCCESS_COUNTER" ]]; then
         echo "Repair Success Count: $(cat "$REPAIR_SUCCESS_COUNTER")"
@@ -1435,37 +1478,37 @@ generate_json_status() {
     timestamp=$(date -Iseconds)
     local success_count=0
     local failure_count=0
-    
+
     [[ -f "$REPAIR_SUCCESS_COUNTER" ]] && success_count=$(cat "$REPAIR_SUCCESS_COUNTER")
     [[ -f "$REPAIR_FAILURE_COUNTER" ]] && failure_count=$(cat "$REPAIR_FAILURE_COUNTER")
-    
+
     # Interface status
     local dsl_status="false"
-    local lte_status="false" 
+    local lte_status="false"
     local lan_status="false"
     local mgmt_status="false"
-    
+
     check_interface_status "$DSL_INTERFACE" && dsl_status="true" || dsl_status="false"
     check_interface_status "$LTE_INTERFACE" && lte_status="true" || lte_status="false"
     check_interface_status "$LAN_INTERFACE" && lan_status="true" || lan_status="false"
     check_interface_status "$MGMT_INTERFACE" && mgmt_status="true" || mgmt_status="false"
-    
+
     # Route counts
     local default_routes
     default_routes=$(ip route show | grep -c "^default via")
     local lan_route_status="false"
     local mgmt_route_status="false"
-    
+
     ip route show | grep -q "^$LAN_SUBNET dev $LAN_INTERFACE" && lan_route_status="true" || lan_route_status="false"
     ip route show | grep -q "^$MGMT_SUBNET dev $MGMT_INTERFACE" && mgmt_route_status="true" || mgmt_route_status="false"
-    
+
     # NetworkManager status
     local wan_never_default="unknown"
     if command -v nmcli &>/dev/null; then
         wan_never_default=$(nmcli -t -f ipv4.never-default connection show "$WAN_PRIMARY_CONNECTION" 2>/dev/null | cut -d: -f2)
         [[ -z "$wan_never_default" ]] && wan_never_default="unknown"
     fi
-    
+
     # v3.3.0: Read LTE state from persistent file (for cross-process visibility)
     local lte_state
     lte_state=$(read_lte_state)
@@ -1483,7 +1526,7 @@ generate_json_status() {
       "status": $dsl_status
     },
     "lte": {
-      "name": "$LTE_INTERFACE", 
+      "name": "$LTE_INTERFACE",
       "status": $lte_status
     },
     "lan": {

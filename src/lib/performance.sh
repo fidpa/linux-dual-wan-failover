@@ -86,11 +86,11 @@ init_cache_structures() {
     cache_timestamps=()
     dns_cache=()
     gateway_cache=()
-    
+
     cache_hits=0
     cache_misses=0
     parallel_tests=0
-    
+
     log "DEBUG" "Cache structures initialized"
 }
 
@@ -116,11 +116,11 @@ get_cache_stats() {
     local total_requests
     total_requests=$((cache_hits + cache_misses))
     local hit_rate=0
-    
+
     if [[ $total_requests -gt 0 ]]; then
         hit_rate=$((cache_hits * 100 / total_requests))
     fi
-    
+
     echo "Cache: ${hit_rate}% hit rate (${cache_hits}/${total_requests}), ${#ping_cache[@]} entries"
 }
 
@@ -163,7 +163,7 @@ cached_ping() {
     local cache_key="${interface}_${sanitized_target}"
     local now
     now=$(get_timestamp)
-    
+
     # Check cache validity
     if is_cache_valid "$cache_key" "$now"; then
         ((cache_hits++)) || true
@@ -175,18 +175,18 @@ cached_ping() {
     # Cache miss - perform actual ping
     ((cache_misses++)) || true
     log "DEBUG" "Cache miss for $cache_key"
-    
+
     local result
     result=$(perform_ping_test "$target" "$interface")
     local exit_code=$?
-    
+
     # Update cache
     ping_cache[$cache_key]="$result"
     cache_timestamps[$cache_key]="$now"
-    
+
     # Prevent cache from growing too large
     manage_cache_size
-    
+
     echo "$result"
     return $exit_code
 }
@@ -196,7 +196,7 @@ perform_ping_test() {
     local target="$1"
     local interface="$2"
     local timeout=2
-    
+
     # Use timeout to prevent hanging
     timeout $timeout ping -c 1 -W 1 -I "$interface" "$target" 2>/dev/null | grep -q 'time='
     local exit_code=$?
@@ -223,20 +223,20 @@ perform_ping_test() {
 test_interfaces_parallel() {
     local primary_iface="${1:-$PRIMARY_IFACE}"
     local backup_iface="${2:-$BACKUP_IFACE}"
-    
+
     local primary_result_file="/tmp/failover_primary_$$"
     local backup_result_file="/tmp/failover_backup_$$"
 
     ((parallel_tests++)) || true
     log "DEBUG" "Starting parallel test #$parallel_tests"
-    
+
     # Start background tests
     test_interface_comprehensive "$primary_iface" > "$primary_result_file" &
     local primary_pid=$!
-    
+
     test_interface_comprehensive "$backup_iface" > "$backup_result_file" &
     local backup_pid=$!
-    
+
     # Wait for completion with timeout
     local wait_start
     wait_start=$(get_timestamp)
@@ -301,10 +301,10 @@ wait_for_processes() {
         if ! kill -0 "$pid1" 2>/dev/null && ! kill -0 "$pid2" 2>/dev/null; then
             return 0
         fi
-        
+
         sleep 0.5
     done
-    
+
     return 1
 }
 
@@ -459,6 +459,7 @@ elif pct >= 90:
 PYEOF
 )
     [[ -n "$result" ]] && echo "$result"
+    return 0
 }
 
 # ----------------------------------------------------------------------------
@@ -581,13 +582,13 @@ test_connectivity_score() {
     local interface="$1"
     local success_count=0
     local total_targets=${#CHECK_IPS[@]}
-    
+
     for target in "${CHECK_IPS[@]}"; do
         if cached_ping "$target" "$interface" | grep -q "success"; then
             ((success_count++)) || true
         fi
     done
-    
+
     # Calculate score (0-25 based on success ratio)
     local score=0
     if [[ $total_targets -gt 0 ]]; then
@@ -596,52 +597,31 @@ test_connectivity_score() {
     echo "$score"
 }
 
-# Test DNS resolution with interface binding
+# Test DNS resolution with interface binding (DoH-based)
+# Returns 25 on success, 0 on failure. Cached via the existing dns_cache
+# mechanism. The previous dig -b path failed for the demoted backup interface
+# due to asymmetric routing — see network.sh::measure_dns_doh for background.
 test_dns_score() {
     local interface="$1"
     local cache_key="dns_${interface}"
     local now
     now=$(get_timestamp)
-    
-    # Check DNS cache
+
     if is_cache_valid "$cache_key" "$now"; then
         echo "${dns_cache[$cache_key]}"
         return 0
     fi
-    
-    # Get interface IP for binding
-    local bind_ip
-    bind_ip=$(ip -4 addr show "$interface" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
-    
-    # Test DNS resolution with interface binding
-    local dns_working=false
-    for dns_server in "${DNS_SERVERS[@]}"; do
-        if [[ -n "$bind_ip" ]]; then
-            # Use dig with interface binding
-            if timeout 3 dig @"$dns_server" google.com +short -b "$bind_ip" &>/dev/null; then
-                dns_working=true
-                break
-            fi
-        else
-            # Fallback to nslookup
-            if timeout 3 nslookup google.com "$dns_server" &>/dev/null; then
-                dns_working=true
-                break
-            fi
-        fi
-    done
-    
-    local score
-    if $dns_working; then
+
+    local score=0
+    local result
+    result=$(measure_dns_doh "$interface" "google.com")
+    if [[ "$result" != "999" ]]; then
         score=25
-    else
-        score=0
     fi
-    
-    # Update cache
+
     dns_cache[$cache_key]="$score"
     cache_timestamps[$cache_key]="$now"
-    
+
     echo "$score"
 }
 
@@ -650,12 +630,12 @@ test_gateway_score() {
     local interface="$1"
     local gateway
     gateway=$(get_interface_gateway "$interface")
-    
+
     if [[ -z "$gateway" ]]; then
         echo "0"
         return 0
     fi
-    
+
     # Test gateway ping
     if cached_ping "$gateway" "$interface" | grep -q "success"; then
         echo "25"
@@ -667,7 +647,7 @@ test_gateway_score() {
 # Test HTTP connectivity
 test_http_score() {
     local interface="$1"
-    
+
     # Simple HTTP test
     if timeout 5 curl -s --interface "$interface" -m 3 http://google.com &>/dev/null; then
         echo "25"
@@ -680,7 +660,7 @@ test_http_score() {
 invalidate_cache() {
     local interface="${1:-all}"
     local invalidated=0
-    
+
     if [[ "$interface" == "all" ]]; then
         ping_cache=()
         cache_timestamps=()
@@ -692,18 +672,18 @@ invalidate_cache() {
         # Invalidate interface-specific entries
         for cache_key in "${!ping_cache[@]}"; do
             if [[ "$cache_key" == "${interface}_"* ]]; then
-                unset ping_cache[$cache_key]
-                unset cache_timestamps[$cache_key]
+                unset "ping_cache[$cache_key]"
+                unset "cache_timestamps[$cache_key]"
                 ((invalidated++)) || true
             fi
         done
-        
+
         # DNS and gateway cache
         local dns_key="dns_${interface}"
         local gw_key="gw_${interface}"
-        [[ -n "${dns_cache[$dns_key]:-}" ]] && unset dns_cache[$dns_key] && unset cache_timestamps[$dns_key] && ((invalidated++)) || true
-        [[ -n "${gateway_cache[$gw_key]:-}" ]] && unset gateway_cache[$gw_key] && unset cache_timestamps[$gw_key] && ((invalidated++)) || true
-        
+        [[ -n "${dns_cache[$dns_key]:-}" ]] && unset "dns_cache[$dns_key]" && unset "cache_timestamps[$dns_key]" && ((invalidated++)) || true
+        [[ -n "${gateway_cache[$gw_key]:-}" ]] && unset "gateway_cache[$gw_key]" && unset "cache_timestamps[$gw_key]" && ((invalidated++)) || true
+
         log "DEBUG" "Invalidated $invalidated cache entries for $interface"
     fi
 }
@@ -721,8 +701,8 @@ cleanup_cache() {
             local age
             age=$((now - cache_timestamps[$cache_key]))
             if [[ $age -gt 60 ]]; then  # 1 minute expiry for cleanup
-                unset ping_cache[$cache_key]
-                unset cache_timestamps[$cache_key]
+                unset "ping_cache[$cache_key]"
+                unset "cache_timestamps[$cache_key]"
                 ((expired++)) || true
             fi
         done
@@ -752,8 +732,8 @@ manage_cache_size() {
         for cache_key in "${!cache_timestamps[@]}"; do
             [[ $removed -ge $to_remove ]] && break
 
-            unset ping_cache[$cache_key]
-            unset cache_timestamps[$cache_key]
+            unset "ping_cache[$cache_key]"
+            unset "cache_timestamps[$cache_key]"
             ((removed++)) || true
         done
 
@@ -773,7 +753,7 @@ record_event_signal_latency() {
     local latency="$1"
     ((event_signal_count++)) || true
     event_signal_latency=$((event_signal_latency + latency))
-    
+
     log "DEBUG" "Event signal latency recorded: ${latency}ms (count: $event_signal_count)"
 }
 
@@ -781,7 +761,7 @@ record_event_signal_latency() {
 record_event_processing_time() {
     local processing_time="$1"
     event_processing_time="$processing_time"
-    
+
     log "DEBUG" "Event processing time: ${processing_time}ms"
 }
 
@@ -789,18 +769,18 @@ record_event_processing_time() {
 record_emergency_failover_time() {
     local failover_time="$1"
     emergency_failover_time="$failover_time"
-    
+
     log "INFO" "Emergency failover completed in: ${failover_time}ms"
 }
 
 # Get event performance statistics
 get_event_performance_stats() {
     local avg_signal_latency=0
-    
+
     if [[ $event_signal_count -gt 0 ]]; then
         avg_signal_latency=$((event_signal_latency / event_signal_count))
     fi
-    
+
     echo "Event Performance: ${event_signal_count} signals, avg latency ${avg_signal_latency}ms, last processing ${event_processing_time}ms, last failover ${emergency_failover_time}ms"
 }
 
@@ -808,10 +788,10 @@ get_event_performance_stats() {
 get_performance_stats() {
     local cache_stats
     cache_stats=$(get_cache_stats)
-    
+
     local event_stats
     event_stats=$(get_event_performance_stats)
-    
+
     echo "$cache_stats | $event_stats | Parallel tests: $parallel_tests"
 }
 

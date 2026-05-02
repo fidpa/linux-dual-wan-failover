@@ -276,7 +276,7 @@ for the schema and how to write your own.
 
 ## Status
 
-This is **v0.1.0-alpha**. Core failover and routing has been running in
+This is **v0.1.1**. Core failover and routing has been running in
 production on a single hardware setup (Raspberry Pi 5 + DSL + Netgear LM1200)
 for over a year, but the public release is a first sanitised cut.
 

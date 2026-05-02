@@ -113,10 +113,14 @@ LOG_TO_STDOUT="${LOG_TO_STDOUT:-false}"
 #
 # ============================================================================
 
-# Default configuration
+# Default configuration (public library defaults; consumed by sourcing scripts)
+# shellcheck disable=SC2034
 readonly DEFAULT_CHECK_INTERVAL=30
+# shellcheck disable=SC2034
 readonly DEFAULT_FAILURE_THRESHOLD=3
+# shellcheck disable=SC2034
 readonly DEFAULT_RECOVERY_THRESHOLD=15
+# shellcheck disable=SC2034
 readonly DEFAULT_LOG_FILE="/var/log/linux-dual-wan-failover/failover-enhanced.log"
 readonly DEFAULT_STATE_DIR="/run/wan-state"
 

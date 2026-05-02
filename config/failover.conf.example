@@ -66,6 +66,19 @@ DNS_SERVERS=("8.8.8.8" "1.1.1.1")
 # extremely unlikely.
 DNS_TEST_DOMAINS=("google.com" "cloudflare.com")
 
+# DNS test method:
+#   doh  — DNS-over-HTTPS via curl --interface (real SO_BINDTODEVICE binding,
+#          works on demoted backup interfaces). Default since v0.x.
+#   dig  — legacy dig -b path (only sets source IP, fails on demoted backup
+#          interfaces due to asymmetric routing). Kept as soft-rollback only.
+# Background: dig -b sets the source IP but cannot force the outgoing
+# interface, so DNS packets follow the kernel's destination-based routing.
+# When the primary uplink is demoted (higher metric), packets exit via the
+# active backup with the primary's source IP — return traffic gets dropped
+# by the ISP or never matches the source — and the test reports a 999 ms
+# timeout for a perfectly healthy primary, blocking failback.
+DNS_TEST_METHOD="${DNS_TEST_METHOD:-doh}"
+
 # ============================================================================
 # Timing
 # ============================================================================

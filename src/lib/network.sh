@@ -81,15 +81,15 @@ test_connectivity() {
     local target_ips=("${CHECK_IPS[@]:-${DEFAULT_CHECK_IPS[@]}}")
     local success_count=0
     local total_tests=${#target_ips[@]}
-    
+
     log "DEBUG" "Testing connectivity on $interface to ${total_tests} targets"
-    
+
     for target in "${target_ips[@]}"; do
         if test_ping_target "$interface" "$target"; then
             ((success_count++)) || true
         fi
     done
-    
+
     # Calculate success percentage
     local success_rate=0
     if [[ $total_tests -gt 0 ]]; then
@@ -129,9 +129,9 @@ test_dns() {
     local interface="$1"
     local dns_servers=("${DNS_SERVERS[@]:-${DEFAULT_DNS_SERVERS[@]}}")
     local test_domains=("${DNS_TEST_DOMAINS[@]:-${DEFAULT_DNS_TEST_DOMAINS[@]}}")
-    
+
     log "DEBUG" "Testing DNS resolution on $interface"
-    
+
     # Test each DNS server with interface binding
     for dns_server in "${dns_servers[@]}"; do
         if test_dns_server "$dns_server" "${test_domains[0]}" "$interface"; then
@@ -140,42 +140,37 @@ test_dns() {
             return 0
         fi
     done
-    
+
     log "DEBUG" "All DNS tests failed on $interface"
     echo "0"
     return 1
 }
 
-# Test specific DNS server with optional interface binding
+# Test specific DNS server with interface binding (DoH-based)
+# The previous nslookup fallback was a false-positive trap: it ignored the
+# interface argument and answered via the active default route, so the backup
+# interface always appeared "DNS-OK" even when source-bound dig had timed out.
+# Args: $1=dns_server (deprecated/ignored, kept for caller compatibility),
+#       $2=test_domain, $3=interface (REQUIRED for binding)
 test_dns_server() {
-    local dns_server="$1"
+    local dns_server="$1"  # Retained for log compat; ignored by DoH path
     local test_domain="$2"
-    local interface="${3:-}"  # Optional interface parameter
-    
-    if [[ -n "$interface" ]]; then
-        # Get IP of interface for binding
-        local bind_ip
-        bind_ip=$(ip -4 addr show "$interface" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
-        if [[ -n "$bind_ip" ]]; then
-            # Use dig with source binding
-            if timeout $DNS_TIMEOUT dig @"$dns_server" "$test_domain" +short -b "$bind_ip" &>/dev/null; then
-                log "DEBUG" "DNS test successful: $interface ($bind_ip) -> $dns_server for $test_domain"
-                return 0
-            fi
-            log "DEBUG" "DNS test failed: $interface ($bind_ip) -> $dns_server for $test_domain"
-        else
-            log "DEBUG" "Could not get IP for interface: $interface"
-        fi
-    fi
-    
-    # Fallback to regular nslookup if no interface specified or dig fails
-    if timeout $DNS_TIMEOUT nslookup "$test_domain" "$dns_server" &>/dev/null; then
-        log "DEBUG" "DNS test successful (fallback): $dns_server for $test_domain"
-        return 0
-    else
-        log "DEBUG" "DNS test failed (fallback): $dns_server for $test_domain"
+    local interface="${3:-}"
+
+    if [[ -z "$interface" ]]; then
+        log "DEBUG" "test_dns_server: no interface specified, cannot bind (legacy=$dns_server)"
         return 1
     fi
+
+    local result
+    result=$(measure_dns_doh "$interface" "$test_domain")
+    if [[ "$result" != "999" ]]; then
+        log "DEBUG" "DNS test successful: $interface (DoH) for $test_domain (legacy=$dns_server)"
+        return 0
+    fi
+
+    log "DEBUG" "DNS test failed: $interface (DoH) for $test_domain (legacy=$dns_server)"
+    return 1
 }
 
 # ============================================================================
@@ -186,17 +181,17 @@ test_dns_server() {
 test_gateway() {
     local interface="$1"
     local gateway
-    
+
     gateway=$(get_gateway "$interface")
-    
+
     if [[ -z "$gateway" ]]; then
         log "WARNING" "No gateway found for interface $interface"
         echo "0"
         return 1
     fi
-    
+
     log "DEBUG" "Testing gateway $gateway on $interface"
-    
+
     if test_ping_target "$interface" "$gateway"; then
         log "DEBUG" "Gateway test successful: $gateway"
         echo "100"
@@ -212,10 +207,10 @@ test_gateway() {
 get_gateway() {
     local interface="$1"
     local gateway
-    
+
     # Get default gateway for this interface
     gateway=$(ip route show dev "$interface" | grep default | awk '{print $3}' | head -1)
-    
+
     if [[ -n "$gateway" ]]; then
         echo "$gateway"
     else
@@ -232,9 +227,9 @@ get_gateway() {
 test_http_connectivity() {
     local interface="$1"
     local test_url="${2:-http://google.com}"
-    
+
     log "DEBUG" "Testing HTTP connectivity on $interface to $test_url"
-    
+
     if timeout $HTTP_TIMEOUT curl -s --interface "$interface" -m 3 "$test_url" &>/dev/null; then
         log "DEBUG" "HTTP test successful on $interface"
         echo "100"
@@ -571,10 +566,10 @@ measure_latency() {
     local interface="$1"
     local target="${2:-8.8.8.8}"
     local samples="${3:-3}"
-    
+
     local latency_sum=0
     local successful_pings=0
-    
+
     for ((i=1; i<=samples; i++)); do
         local ping_result
         ping_result=$(timeout $PING_TIMEOUT ping -c 1 -W 1 -I "$interface" "$target" 2>/dev/null | grep 'time=' | cut -d'=' -f4 | cut -d' ' -f1)
@@ -584,7 +579,7 @@ measure_latency() {
             ((successful_pings++)) || true
         fi
     done
-    
+
     if [[ $successful_pings -gt 0 ]]; then
         local avg_latency
         avg_latency=$(echo "scale=2; $latency_sum / $successful_pings" | bc -l)
@@ -599,14 +594,14 @@ measure_packet_loss() {
     local interface="$1"
     local target="${2:-8.8.8.8}"
     local count="${3:-10}"
-    
+
     local ping_output
     ping_output=$(timeout $((PING_TIMEOUT * count)) ping -c "$count" -W 1 -I "$interface" "$target" 2>/dev/null)
-    
+
     if [[ -n "$ping_output" ]]; then
         local packet_loss
         packet_loss=$(grep 'packet loss' <<< "$ping_output" | awk '{print $6}' | cut -d'%' -f1)
-        
+
         if is_numeric "$packet_loss"; then
             echo "$packet_loss"
         else
@@ -745,44 +740,150 @@ get_interface_http_time() {
 }
 
 # ============================================================================
-# MEASUREMENTS — Timed DNS/HTTP (Fallback für Prometheus)
+# MEASUREMENTS — Timed DNS/HTTP (Fallback for Prometheus)
 # ============================================================================
 
-# Measure DNS resolution time in milliseconds
-# Returns: Time in ms, or 999 for failure
-measure_dns_time() {
+# DoH (DNS-over-HTTPS) helper — real interface binding via curl --interface
+# (SO_BINDTODEVICE) instead of dig -b (which only sets the source IP and is
+# defeated by destination-based routing on a demoted backup interface).
+#
+# Args:    $1 = interface (eth0, lte0, ...)
+#          $2 = test_domain (default: google.com)
+# Echo:    integer DNS latency in ms, or 999 on failure
+# Endpoints (each with --resolve bootstrap to bypass system-resolver dependency):
+#   1. https://dns.google/resolve            (8.8.8.8, 8.8.4.4)
+#   2. https://cloudflare-dns.com/dns-query  (1.1.1.1, 1.0.0.1)
+# Validation: HTTP 200 + jq '.Status == 0' (NOERROR per RFC 8484/Google JSON-API)
+#             + .Answer length >= 1 (filters captive-portal false positives).
+# Feature flag: DNS_TEST_METHOD=dig falls back to _measure_dns_dig_legacy().
+#
+# Background: dig -b only sets the source IP — packets still follow the kernel's
+# destination-based routing. When the primary interface is demoted (higher
+# metric), DNS packets exit via the active backup with the primary's source IP
+# → asymmetric routing → ISP filters or response cannot return → timeout (999).
+# curl --interface uses SO_BINDTODEVICE, which forces the actual outgoing
+# interface, so responses come back symmetrically.
+measure_dns_doh() {
     local interface="$1"
-    local dns_server="${2:-8.8.8.8}"
-    local test_domain="${3:-google.com}"
+    local test_domain="${2:-google.com}"
+    local timeout="${DNS_TIMEOUT:-3}"
 
-    # Get IP of interface for binding
-    local bind_ip
-    bind_ip=$(ip -4 addr show "$interface" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+    # Soft rollback: DNS_TEST_METHOD=dig switches to legacy path
+    if [[ "${DNS_TEST_METHOD:-doh}" == "dig" ]]; then
+        _measure_dns_dig_legacy "$interface" "$test_domain"
+        return $?
+    fi
 
-    if [[ -z "$bind_ip" ]]; then
-        log "WARNING" "Could not get IP for interface: $interface"
+    # Defensive: both tools should be present on any sane Linux router
+    if ! command -v curl >/dev/null 2>&1; then
+        log "ERROR" "curl not found, cannot perform DoH test for $interface" >&2
+        echo "999"
+        return 1
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        log "ERROR" "jq not found, cannot validate DoH response for $interface" >&2
         echo "999"
         return 1
     fi
 
-    # Time the DNS query
+    # Endpoint list: host|path|bootstrap_ips_csv
+    local endpoints=(
+        "dns.google|/resolve|8.8.8.8,8.8.4.4"
+        "cloudflare-dns.com|/dns-query|1.1.1.1,1.0.0.1"
+    )
+
+    local endpoint host path bootstrap
+    for endpoint in "${endpoints[@]}"; do
+        IFS='|' read -r host path bootstrap <<< "$endpoint"
+
+        # One --resolve arg per bootstrap IP (belt & suspenders)
+        local resolve_args=()
+        local ip
+        for ip in ${bootstrap//,/ }; do
+            resolve_args+=("--resolve" "${host}:443:${ip}")
+        done
+
+        local url="https://${host}${path}?name=${test_domain}&type=A"
+        local response
+        response=$(timeout "$timeout" curl --silent --fail \
+            --interface "$interface" \
+            --max-time "$timeout" \
+            --connect-timeout 2 \
+            "${resolve_args[@]}" \
+            -H 'Accept: application/dns-json' \
+            -w '\nTIME_TOTAL=%{time_total}\n' \
+            "$url" 2>/dev/null) || {
+            log "DEBUG" "DoH curl failed: $interface -> $host (trying next endpoint)" >&2
+            continue
+        }
+
+        local time_total body
+        time_total=$(printf '%s\n' "$response" | awk -F= '/^TIME_TOTAL=/{print $2}' | tail -1)
+        body=$(printf '%s\n' "$response" | sed '/^TIME_TOTAL=/d')
+
+        # JSON validation: Status==0 (NOERROR) and Answer array non-empty
+        local status answer_count
+        status=$(printf '%s' "$body" | jq -r '.Status // -1' 2>/dev/null)
+        answer_count=$(printf '%s' "$body" | jq -r '.Answer | length' 2>/dev/null)
+
+        if [[ "$status" != "0" ]] || [[ -z "$answer_count" ]] || ! [[ "$answer_count" =~ ^[0-9]+$ ]] || [[ "$answer_count" -lt 1 ]]; then
+            log "DEBUG" "DoH validation failed: $interface -> $host (Status=$status, Answers=$answer_count)" >&2
+            continue
+        fi
+
+        # Convert seconds (e.g. 0.085) to integer ms via awk (no bc dependency)
+        local duration_ms
+        duration_ms=$(awk -v t="$time_total" 'BEGIN { printf "%d", t * 1000 }')
+
+        log "DEBUG" "DoH success: $interface -> $host = ${duration_ms}ms" >&2
+        echo "$duration_ms"
+        return 0
+    done
+
+    log "DEBUG" "DoH failed on all endpoints for $interface" >&2
+    echo "999"
+    return 1
+}
+
+# Legacy dig -b DNS test (DEPRECATED, rollback path only via DNS_TEST_METHOD=dig).
+# WARNING: subject to asymmetric-routing bug on demoted backup interfaces.
+_measure_dns_dig_legacy() {
+    local interface="$1"
+    local test_domain="${2:-google.com}"
+    local dns_server="${3:-8.8.8.8}"
+
+    local bind_ip
+    bind_ip=$(ip -4 addr show "$interface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+
+    if [[ -z "$bind_ip" ]]; then
+        echo "999"
+        return 1
+    fi
+
     local start_ms
     start_ms=$(date +%s%3N)
 
-    if timeout ${DNS_TIMEOUT:-3} dig @"$dns_server" "$test_domain" +short -b "$bind_ip" &>/dev/null; then
-        local end_ms
+    if timeout "${DNS_TIMEOUT:-3}" dig @"$dns_server" "$test_domain" +short -b "$bind_ip" &>/dev/null; then
+        local end_ms duration_ms
         end_ms=$(date +%s%3N)
-        local duration_ms
         duration_ms=$((end_ms - start_ms))
-
-        log "DEBUG" "DNS resolution time for $interface: ${duration_ms}ms"
         echo "$duration_ms"
         return 0
-    else
-        log "DEBUG" "DNS resolution failed for $interface"
-        echo "999"
-        return 1
     fi
+
+    echo "999"
+    return 1
+}
+
+# Measure DNS resolution time in milliseconds (DoH-based)
+# Args: $1=interface, $2=dns_server (deprecated/ignored), $3=test_domain
+# Returns: Time in ms, or 999 for failure
+measure_dns_time() {
+    local interface="$1"
+    # $2 (dns_server) deprecated — DoH endpoints are configured in measure_dns_doh
+    local test_domain="${3:-google.com}"
+
+    measure_dns_doh "$interface" "$test_domain"
 }
 
 # Measure HTTP connection time in milliseconds
@@ -818,25 +919,25 @@ measure_http_time() {
 # Check if interface exists and is configured
 validate_interface() {
     local interface="$1"
-    
+
     # Check if interface exists
     if ! ip link show "$interface" &>/dev/null; then
         log "ERROR" "Interface $interface does not exist"
         return 1
     fi
-    
+
     # Check if interface is up
     if ! ip link show "$interface" | grep -q "state UP"; then
         log "WARNING" "Interface $interface is not UP"
         return 2
     fi
-    
+
     # Check if interface has an IP address
     if ! ip addr show "$interface" | grep -q 'inet '; then
         log "WARNING" "Interface $interface has no IP address"
         return 3
     fi
-    
+
     log "DEBUG" "Interface $interface validation passed"
     return 0
 }
@@ -844,7 +945,7 @@ validate_interface() {
 # Get interface IP address
 get_interface_ip() {
     local interface="$1"
-    
+
     ip addr show "$interface" 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d'/' -f1 | head -1
 }
 
@@ -854,16 +955,16 @@ get_interface_status() {
     local ip_addr
     local gateway
     local status
-    
+
     ip_addr=$(get_interface_ip "$interface")
     gateway=$(get_gateway "$interface")
-    
+
     if validate_interface "$interface"; then
         status="UP"
     else
         status="DOWN"
     fi
-    
+
     echo "Interface: $interface, Status: $status, IP: ${ip_addr:-none}, Gateway: ${gateway:-none}"
 }
 
@@ -921,36 +1022,14 @@ measure_jitter() {
     echo "$jitter"
 }
 
-# Measure DNS resolution performance (time in milliseconds)
+# Measure DNS resolution performance (time in milliseconds, DoH-based)
+# Args: $1=interface, $2=dns_server (deprecated/ignored), $3=test_domain
 measure_dns_performance() {
     local interface="$1"
-    local dns_server="${2:-8.8.8.8}"
+    # $2 (dns_server) deprecated — DoH endpoints in measure_dns_doh
     local test_domain="${3:-google.com}"
 
-    # Get interface IP for binding
-    local bind_ip
-    bind_ip=$(ip -4 addr show "$interface" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
-
-    if [[ -z "$bind_ip" ]]; then
-        echo "999"  # High time indicates failure
-        return 1
-    fi
-
-    # Measure DNS resolution time with dig
-    local start_ms
-    start_ms=$(date +%s%3N)
-
-    if timeout $DNS_TIMEOUT dig @"$dns_server" "$test_domain" +short -b "$bind_ip" &>/dev/null; then
-        local end_ms
-        end_ms=$(date +%s%3N)
-        local dns_time
-        dns_time=$((end_ms - start_ms))
-        echo "$dns_time"
-        return 0
-    else
-        echo "999"  # Failed
-        return 1
-    fi
+    measure_dns_doh "$interface" "$test_domain"
 }
 
 # Measure HTTP connectivity performance (time in milliseconds)
@@ -1126,14 +1205,17 @@ test_bandwidth() {
 # MEASUREMENTS — DNS Detailed (Multi-Resolver Analyse)
 # ============================================================================
 
-# Measure detailed DNS performance metrics across multiple resolvers
-# Returns JSON with success rates, failure categorization, resolver comparison
+# Measure detailed DNS performance metrics across multiple resolvers (DoH-based)
+# Returns JSON with success rates, failure categorization, resolver comparison.
+# Note: ISP-resolver removed (does not speak DoH); SQLite ISP column will be NULL
+# for new rows. The resolver labels remain "8.8.8.8"/"1.1.1.1" for schema
+# continuity, even though internally measure_dns_doh contacts dns.google /
+# cloudflare-dns.com.
 measure_dns_detailed() {
     local interface="$1"
     local domain="${2:-google.com}"
-    local resolvers=("8.8.8.8" "1.1.1.1" "192.0.2.1")  # Google, Cloudflare, ISP
+    local resolvers=("8.8.8.8" "1.1.1.1")
 
-    # Get interface IP for dig -b binding
     local interface_ip
     interface_ip=$(get_interface_ip "$interface")
 
@@ -1149,32 +1231,23 @@ measure_dns_detailed() {
 
     local resolver_results=()
 
+    local resolver
     for resolver in "${resolvers[@]}"; do
         local resolver_time=0
         local resolver_successes=0
-        local samples=2  # Reduced from 3 for performance
+        local samples=2
 
+        local i
         for ((i=1; i<=samples; i++)); do
             ((total_queries++)) || true
 
-            local start
-            start=$(date +%s%3N)
-            local result
-            # Timeout 1.5s consistent with measure_dns_performance
-            # Note: Using || true to prevent set -e from exiting on dig failures
-            result=$(timeout 1.5 dig +short +tries=1 +time=1 "@$resolver" "$domain" -b "$interface_ip" 2>&1 || true)
-            local exit_code=$?
-            local end
-            end=$(date +%s%3N)
             local query_time
-            query_time=$((end - start))
+            query_time=$(measure_dns_doh "$interface" "$domain")
 
-            if [[ $exit_code -eq 0 ]] && [[ -n "$result" ]] && [[ ! "$result" =~ "connection timed out" ]]; then
+            if [[ "$query_time" != "999" ]]; then
                 ((successful_queries++)) || true
                 ((resolver_successes++)) || true
                 resolver_time=$((resolver_time + query_time))
-            elif [[ "$result" =~ "SERVFAIL" ]]; then
-                ((servfails++)) || true
             else
                 ((timeouts++)) || true
             fi
@@ -1229,4 +1302,4 @@ export -f assess_network_quality validate_interface get_interface_status
 export -f measure_latency measure_packet_loss compare_interfaces
 export -f get_gateway get_interface_ip test_bandwidth
 export -f measure_jitter measure_dns_performance measure_http_performance test_wan_quality
-export -f measure_dns_detailed
+export -f measure_dns_detailed measure_dns_doh

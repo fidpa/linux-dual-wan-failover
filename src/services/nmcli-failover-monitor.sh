@@ -99,7 +99,7 @@ trigger_instant_failover() {
         "EVENT_TYPE=${event}" \
         "TRIGGER_SOURCE=nmcli_monitor" \
         "ACTION=failover"
-    
+
     # First try: Signal via PID file (most reliable)
     local pid_file="/var/run/failover-monitor.pid"
     if [[ -f "$pid_file" ]]; then
@@ -125,7 +125,7 @@ trigger_instant_failover() {
         fi
         log_warning "PID file exists but process not responding, trying fallback"
     fi
-    
+
     # Fallback: Signal via Prozessname (präzises Matching um False Positives zu vermeiden)
     local signaled=0
     while read -r pid; do
@@ -143,10 +143,10 @@ trigger_instant_failover() {
             "STATUS=success"
         return 0
     fi
-    
+
     # Fallback: Direkte Route-Manipulation (Emergency Failover)
     log_warning "Haupt-Failover-Script nicht gefunden - führe Emergency Failover aus"
-    
+
     if [[ "$interface" == "$PRIMARY_IFACE" ]]; then
         # v3.6.0: Route Guardian Pause-Lockfile erstellen (konsistent mit routing.sh v3.4)
         # Format: PID_TIMESTAMP (ermöglicht Stale-Erkennung und Ownership-Tracking)
@@ -244,9 +244,9 @@ check_initial_state() {
 
 process_network_event() {
     local full_line="$1"
-    
+
     log_debug "Raw event: $full_line"
-    
+
     # Überspringen wenn nicht Primary Interface
     if [[ "$full_line" != *"$PRIMARY_IFACE"* ]]; then
         return 0
@@ -318,13 +318,13 @@ process_network_event() {
             log_warning "IPv4 config removed from $PRIMARY_IFACE"
             trigger_instant_failover "$PRIMARY_IFACE" "ip4-lost"
             ;;
-            
+
         # Physische Link-Down-Pattern
         *"link"*"down"*|*"Link"*"unten"*)
             log_critical "Physical link down on $PRIMARY_IFACE"
             trigger_instant_failover "$PRIMARY_IFACE" "link-down"
             ;;
-            
+
         *)
             # Andere Events für Debugging loggen
             log_debug "Non-critical event: $full_line"
@@ -352,7 +352,7 @@ main() {
 
     # Registriere Script für Änderungs-Erkennung
     script_watch_init "${BASH_SOURCE[0]}"
-    
+
     # Event 2: nmcli availability check
     if ! command -v nmcli &>/dev/null; then
         log_error_structured "nmcli command not available" \
@@ -366,7 +366,7 @@ main() {
         "COMMAND=nmcli" \
         "STATUS=found" \
         "VERSION=$(nmcli --version | head -1)"
-    
+
     # Event 3: Failover script availability check
     if [[ ! -f "$FAILOVER_SCRIPT" ]]; then
         log_warning_structured "Failover script not found - using emergency mode" \

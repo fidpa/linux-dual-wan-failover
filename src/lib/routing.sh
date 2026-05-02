@@ -40,12 +40,15 @@ fi
 
 # Route management settings
 readonly ROUTE_BACKUP_DIR="/tmp/route_backups"
+# shellcheck disable=SC2034 # public library default
 readonly ROUTE_VERIFICATION_TIMEOUT=10
+# shellcheck disable=SC2034 # public library default
 readonly MAX_ROUTE_RETRIES=3
 
 # Failover state tracking
 current_active_interface=""
 last_failover_timestamp=0
+# shellcheck disable=SC2034 # used by sourcing scripts
 failover_in_progress=false
 
 # ============================================================================
@@ -87,14 +90,15 @@ failover_in_progress=false
 
 # Create backup of current routing table
 backup_current_routes() {
-    local backup_file="$ROUTE_BACKUP_DIR/routes_backup_$(get_timestamp)_$$"
-    
+    local backup_file
+    backup_file="$ROUTE_BACKUP_DIR/routes_backup_$(get_timestamp)_$$"
+
     # Create backup directory if it doesn't exist
     mkdir -p "$ROUTE_BACKUP_DIR" 2>/dev/null || {
         log "ERROR" "Failed to create route backup directory"
         return 1
     }
-    
+
     # Save current routes
     if ip route save > "$backup_file" 2>/dev/null; then
         log "DEBUG" "Routes backed up to: $backup_file"
@@ -109,19 +113,19 @@ backup_current_routes() {
 # Restore routes from backup file
 restore_routes_from_backup() {
     local backup_file="$1"
-    
+
     if [[ ! -f "$backup_file" ]]; then
         log "ERROR" "Backup file not found: $backup_file"
         return 1
     fi
-    
+
     log "WARNING" "Restoring routes from backup: $backup_file"
-    
+
     # Only remove default routes — never `ip route flush all`. The latter
     # also drops link-scope LAN and out-of-band management routes, which
     # has caused SSH lockouts in the past.
     ip route del default 2>/dev/null || true
-    
+
     # Restore from backup
     if ip route restore < "$backup_file" 2>/dev/null; then
         log "INFO" "Routes restored successfully from backup"
@@ -142,29 +146,30 @@ safe_route_change() {
     local new_interface="$1"
     local old_interface="$2"
     local backup_file
-    
+
     log "INFO" "Starting safe route change: $old_interface -> $new_interface"
-    
+
     # Create backup of current routes
     backup_file=$(backup_current_routes)
     if [[ $? -ne 0 ]]; then
         log "ERROR" "Failed to backup routes - aborting route change"
         return 1
     fi
-    
+
     # Setup rollback trap
+    # shellcheck disable=SC2064 # backup_file must expand now, not at signal time
     trap "rollback_route_change '$backup_file'" ERR
-    
+
     # Get gateway for new interface
     local new_gateway
     new_gateway=$(get_gateway_for_interface "$new_interface")
-    
+
     if [[ -z "$new_gateway" ]]; then
         log "ERROR" "No gateway found for interface: $new_interface"
         rollback_route_change "$backup_file"
         return 1
     fi
-    
+
     # Perform the route change
     if execute_route_change "$new_interface" "$new_gateway"; then
         # Verify the change worked
@@ -203,19 +208,41 @@ _swap_primary_metric() {
         log "WARNING" "Expected metric $from_metric but found $actual_metric on $iface (proceeding anyway)"
     fi
 
-    # Step 1: Persist new metric in NetworkManager (survives DHCP renewals)
+    # Step 1: Persist new metric in NetworkManager (survives DHCP renewals).
+    # Independent of kernel routing state and important for the reconnect path.
     if ! nmcli connection modify "$nm_conn" ipv4.route-metric "$to_metric" 2>/dev/null; then
         log "WARNING" "Failed to persist metric $to_metric in NetworkManager (non-fatal, route-guardian backstop)"
     fi
 
-    # Step 2: Swap kernel route (del all for this interface, add with target metric)
+    # Step 2: Carrier-aware short-circuit (anti-stall fix).
+    # If primary has no carrier, the kernel will refuse `ip route add default
+    # ... dev <iface>` with "Network is unreachable", which then trips
+    # safe_route_change() → rollback → emergency recovery, all of which also
+    # fail. Since the NM metric is already persisted in Step 1 (applied on
+    # the next DHCP cycle), and since the backup is automatically preferred
+    # by the kernel when there is no competing primary route, we can safely
+    # return here.
+    local primary_carrier
+    primary_carrier=$(cat "/sys/class/net/${iface}/carrier" 2>/dev/null || echo "0")
+    if [[ "$primary_carrier" != "1" ]]; then
+        # Defensive: clean up any stale routes for the dead interface (idempotent)
+        while ip route del default dev "$iface" 2>/dev/null; do
+            :
+        done
+        log "INFO" "Primary $iface has no carrier — skipping kernel route swap (NM metric $to_metric persisted for reconnect)"
+        return 0
+    fi
+
+    # Step 3: Swap kernel route (del all for this interface, add with target metric)
     # Get current gateway from routing table (may differ from config after DHCP)
     local current_gw
     current_gw=$(ip route show default dev "$iface" 2>/dev/null | head -1 | awk '{print $3}')
     [[ -z "$current_gw" ]] && current_gw="$gateway"
 
     # Delete ALL existing default routes for this interface (any metric)
-    while ip route del default dev "$iface" 2>/dev/null; do true; done
+    while ip route del default dev "$iface" 2>/dev/null; do
+        :
+    done
 
     # Add with target metric
     if ip route add default via "$current_gw" dev "$iface" metric "$to_metric" 2>/dev/null; then
@@ -250,30 +277,31 @@ execute_route_change() {
 
 # Restore missing backup route after failover change
 restore_missing_backup_route() {
+    # shellcheck disable=SC2034 # kept for API compatibility; monitoring-only since v2.0
     local changed_interface="$1"
-    
+
     # Define expected routes
     local dsl_gateway="192.0.2.1"
     local lte_gateway="192.0.2.10"  # Netgear LM1200 Bridge-Mode Management IP
     local primary_iface="${PRIMARY_IFACE:-eth0}"
     local backup_iface="${BACKUP_IFACE:-lte0}"
-    
+
     # DISABLED: Route addition now managed by Route Guardian v2.0
     # Architecture Fix (03.09.2025): WAN-Monitor focuses on Interface-Scoring only
     # Route Guardian v2.0 handles all Default-Route management for consistency
-    
+
     # Check if DSL route exists (including DHCP variants) - MONITORING ONLY
     if ! ip route show | grep -qE "^default via $dsl_gateway dev $primary_iface.*(metric 50|proto dhcp.*metric 50)"; then
         log "INFO" "DSL route managed by Route Guardian v2.0 (metric 50)"
         # DISABLED: ip route add default via "$dsl_gateway" dev "$primary_iface" metric 100 2>/dev/null || true
     fi
-    
-    # Check if LTE route exists (including DHCP variants) - MONITORING ONLY  
+
+    # Check if LTE route exists (including DHCP variants) - MONITORING ONLY
     if ! ip route show | grep -qE "^default via $lte_gateway dev $backup_iface.*(metric 200|proto dhcp.*metric 200)"; then
         log "INFO" "LTE route managed by Route Guardian v2.0 + NetworkManager (metric 200)"
         # DISABLED: ip route add default via "$lte_gateway" dev "$backup_iface" metric 200 2>/dev/null || true
     fi
-    
+
     log "DEBUG" "Backup route restoration completed"
 }
 
@@ -404,26 +432,26 @@ emergency_restore_any_route() {
 # Get gateway for specific interface
 get_gateway_for_interface() {
     local interface="$1"
-    
+
     # Try to get gateway from routing table
     local gateway
     gateway=$(ip route show dev "$interface" | grep default | awk '{print $3}' | head -1)
-    
+
     if [[ -n "$gateway" ]]; then
         log "DEBUG" "Gateway for $interface: $gateway"
         echo "$gateway"
         return 0
     fi
-    
+
     # If no default route, try to get from DHCP lease
     gateway=$(get_gateway_from_dhcp "$interface")
-    
+
     if [[ -n "$gateway" ]]; then
         log "DEBUG" "Gateway from DHCP for $interface: $gateway"
         echo "$gateway"
         return 0
     fi
-    
+
     log "WARNING" "No gateway found for interface: $interface"
     return 1
 }
@@ -432,7 +460,7 @@ get_gateway_for_interface() {
 get_gateway_from_dhcp() {
     local interface="$1"
     local lease_file="/var/lib/dhcp/dhclient.${interface}.leases"
-    
+
     if [[ -f "$lease_file" ]]; then
         local gateway
         gateway=$(grep "option routers" "$lease_file" | tail -1 | awk '{print $3}' | tr -d ';')
@@ -479,12 +507,12 @@ update_wan_state() {
     local interface="$1"
     local score="$2"
     local timestamp="${3:-$(get_timestamp)}"
-    
+
     # Update state file
     save_state "active_wan" "$interface"
     save_state "wan_score" "$score"
     save_state "last_update" "$timestamp"
-    
+
     # Update internal state
     current_active_interface="$interface"
 }

@@ -24,6 +24,7 @@ The --password-env-file expects a shell-style file with:
     LM1200_PASSWORD=your-modem-admin-password
 File must be mode 0600 and owned by the user running this script.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,7 +32,6 @@ import json
 import logging
 import os
 import sys
-import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -65,8 +65,8 @@ def load_password(args: argparse.Namespace) -> str:
         return _read_password_env_file(Path(args.password_env_file))
 
     raise SystemExit(
-        f"No password provided. Use --password, $LM1200_PASSWORD, "
-        f"or --password-env-file FILE."
+        "No password provided. Use --password, $LM1200_PASSWORD, "
+        "or --password-env-file FILE."
     )
 
 
@@ -87,7 +87,7 @@ def _read_password_env_file(path: Path) -> str:
             line = raw.strip()
             if not line or line.startswith("#") or not line.startswith(prefix):
                 continue
-            value = line[len(prefix):]
+            value = line[len(prefix) :]
             if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
                 value = value[1:-1]
             else:
@@ -145,7 +145,9 @@ class ModemClient:
             raise RuntimeError(f"Login failed (HTTP {status})")
         admin = self._fetch_model()
         if admin.get("session", {}).get("userRole") != "Admin":
-            raise RuntimeError(f"Admin login not granted (role={admin.get('session', {}).get('userRole')})")
+            raise RuntimeError(
+                f"Admin login not granted (role={admin.get('session', {}).get('userRole')})"
+            )
 
     def fetch_model(self) -> dict[str, Any]:
         return self._fetch_model()
@@ -163,7 +165,7 @@ def extract_limit_pct(model: dict[str, Any]) -> float | None:
     generic = data_usage.get("generic", {}) or {}
 
     transferred = generic.get("dataTransferred")  # bytes
-    limit = generic.get("dataLimit")              # bytes; 0 / None = unlimited
+    limit = generic.get("dataLimit")  # bytes; 0 / None = unlimited
 
     if not isinstance(transferred, (int, float)) or transferred < 0:
         return None
@@ -193,7 +195,9 @@ def write_snapshot(path: Path, limit_pct: float | None) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="LM1200 quota provider.")
-    parser.add_argument("--modem-ip", default=os.getenv("LM1200_MODEM_IP", DEFAULT_MODEM_IP))
+    parser.add_argument(
+        "--modem-ip", default=os.getenv("LM1200_MODEM_IP", DEFAULT_MODEM_IP)
+    )
     parser.add_argument(
         "--snapshot-path",
         default=os.getenv("QUOTA_SNAPSHOT_PATH", DEFAULT_SNAPSHOT_PATH),
@@ -202,8 +206,11 @@ def main() -> int:
     parser.add_argument("--password")  # avoid in production; visible in `ps`
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Query the modem and print the snapshot, but don't write.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Query the modem and print the snapshot, but don't write.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
