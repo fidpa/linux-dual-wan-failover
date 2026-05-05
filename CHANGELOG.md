@@ -5,7 +5,64 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] — 2026-05-05
+
+### Added
+
+- **Optional Flask + gunicorn Web-UI** under `src/web/`. `install.sh
+  --with-web-ui` provisions a dedicated `failover-web` system user (in
+  group `wan-state`), a venv at `/usr/local/lib/.../web/venv`, and a
+  `failover-web.service` systemd unit binding `127.0.0.1:8091`. The
+  dashboard surfaces live state, latency / loss / DNS / HTTP metrics per
+  interface, a 30-day failover-event table, three operator buttons
+  (manual failback, force-failover, monitor restart), a whitelisted
+  16-key config editor, and on-demand `ping` / `dig` / `traceroute` /
+  `mtr` streamed via Server-Sent Events. Documentation lives at
+  `docs/how-to/configure-web-ui.md`,
+  `docs/reference/web-api.md`, and
+  `docs/explanation/web-ui-architecture.md`.
+- **`process_manual_action_request()` in `failover-monitor.sh`.** The
+  orchestrator now polls `${RUNTIME_DIR}/wan-state/manual_action.json`
+  once per main-loop iteration, validates the JSON payload (action,
+  request_id, ts), enforces a 30 s freshness window and idempotency
+  through `manual_action_processed_ids`, and dispatches to
+  `perform_failover` with `manual_failback` / `manual_failover_force`
+  reasons that bypass the score-based decision gates while still
+  honouring `ANTI_FLAPPING_DELAY`. The function is a cheap `stat()`
+  per loop iteration when the file is absent — installations without
+  the Web-UI pay nothing.
+- **`systemd/failover-web.{service,sudoers,tmpfiles,nginx.example}`.**
+  Hardened systemd unit (gunicorn, 2 × 4 threads, full set of
+  `Protect*` knobs), minimal sudoers fragment (`systemctl restart
+  failover-monitor.service` + the root-owned config installer only),
+  tmpfiles directives for `/var/lib/failover-web` and the audit log,
+  and an nginx upstream sample with the X-Forwarded-For overwrite
+  rule the source-IP extractor relies on.
+- **Root-owned validating config installer.**
+  `src/web/install-failover-conf.sh` re-validates every line of the
+  staged `failover.conf` in root context against the same 16-key
+  schema the web app enforces, then atomically renames it into
+  `/etc/<project>/failover.conf`. Eliminates the
+  attacker-controlled-source LPE class that any "sudo cp" rule would
+  expose.
+- **Alerting plugin dispatcher** (`src/web/alerts/dispatcher.py`).
+  The Web-UI shares the same `send_alert <type> <message>` plugin
+  contract documented in `plugins/alerting/README.md` — `none`,
+  `mattermost`, `webhook`, or any custom plugin work without code
+  changes. Default backend is `none` (silent).
+- **`failover.conf.example` Web-UI block** with commented-out
+  `FAILOVER_WEB_CSRF_HOSTS`, `FAILOVER_WEB_LABEL_PRIMARY`,
+  `FAILOVER_WEB_LABEL_BACKUP`, and `FAILOVER_WEB_PROM_URL` so operators
+  can tune the dashboard without grepping for env-var names.
+
+### Changed
+
+- **`failover-monitor.service` provisions the `wan-state` subdirectory**
+  with mode `0775` and group `wan-state` via `ExecStartPre=`. The
+  `chgrp` is best-effort (the leading `-` makes it no-op when the group
+  doesn't exist), so an install without the Web-UI keeps the previous
+  semantics. Restart `failover-monitor.service` once after installing
+  the Web-UI so the group flips into place.
 
 ## [0.1.1] — 2026-05-02
 
@@ -156,6 +213,7 @@ stack that has been running in production since 2025-08.
   `ping`.
 - **CI**: `shellcheck`, `bashate`, `bats`, `ruff`.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/fidpa/linux-dual-wan-failover/releases/tag/v0.1.0

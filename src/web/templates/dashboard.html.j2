@@ -1,0 +1,120 @@
+{% extends "base.html.j2" %}
+
+{% block content %}
+<section class="state-panel"
+         hx-get="/api/state-html"
+         hx-trigger="load, every 5s"
+         hx-swap="innerHTML"
+         aria-label="Live network state"
+         aria-live="polite">
+    {% include "_state_panel.html.j2" %}
+</section>
+
+<section class="controls" aria-labelledby="controls-heading">
+    <h2 id="controls-heading">Operative Controls</h2>
+    <p class="muted">All actions are audit-logged{% if alerting_enabled %} and emit an alert{% endif %}. Anti-flapping is enforced by the daemon.</p>
+
+    <button id="failback-btn"
+            class="btn-primary"
+            hx-post="/api/failback"
+            hx-confirm="Trigger manual failback ({{ backup_label }} &rarr; {{ primary_label }})?"
+            hx-swap="innerHTML"
+            hx-target="#action-result"
+            aria-label="Manual failback to primary interface">
+        Manual Failback ({{ backup_label }} &rarr; {{ primary_label }})
+    </button>
+
+    <button id="force-btn"
+            class="btn-danger"
+            hx-post="/api/force-failover"
+            hx-confirm="Force failover {{ primary_label }} &rarr; {{ backup_label }}? Traffic moves immediately."
+            hx-swap="innerHTML"
+            hx-target="#action-result"
+            aria-label="Force failover to backup interface (destructive)">
+        Force Failover ({{ primary_label }} &rarr; {{ backup_label }})
+    </button>
+
+    <button id="restart-btn"
+            class="btn-warn"
+            hx-post="/api/restart-monitor"
+            hx-confirm="Restart {{ target_service }}? (3-5 s downtime, counters reset)"
+            hx-swap="innerHTML"
+            hx-target="#action-result"
+            aria-label="Restart failover-monitor service (counters reset)">
+        Restart Monitor (resets counters)
+    </button>
+
+    <pre id="action-result"
+         class="result"
+         role="status"
+         aria-live="polite"></pre>
+</section>
+
+<section class="config" aria-labelledby="config-heading">
+    <details>
+        <summary id="config-heading">Configuration</summary>
+        <p class="muted">Whitelisted tunables. Apply triggers a daemon restart.</p>
+        <table id="config-table">
+            <thead>
+                <tr><th scope="col">Variable</th><th scope="col">Current</th><th scope="col">New</th><th scope="col">Range</th></tr>
+            </thead>
+            <tbody id="config-body" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML"
+                   hx-on:htmx:after-request="renderConfigForm(event)">
+                <tr><td colspan="4" class="muted">Loading&hellip;</td></tr>
+            </tbody>
+        </table>
+    </details>
+</section>
+
+<section class="history" aria-labelledby="history-heading">
+    <details open>
+        <summary id="history-heading">Event History (last 30 days)</summary>
+        <table>
+            <thead>
+                <tr><th scope="col">Time</th><th scope="col">Type</th><th scope="col">From &rarr; To</th><th scope="col">Reason</th></tr>
+            </thead>
+            <tbody id="history-body"
+                   hx-get="/api/history?days=30"
+                   hx-trigger="load, every 60s"
+                   hx-swap="innerHTML"
+                   hx-on:htmx:after-request="renderHistory(event)"
+                   aria-live="polite">
+                <tr><td colspan="4" class="muted">Loading&hellip;</td></tr>
+            </tbody>
+        </table>
+    </details>
+</section>
+
+<section class="diagnostics" aria-labelledby="diag-heading">
+    <h2 id="diag-heading">Diagnostics</h2>
+    <p class="muted">Subprocess output is streamed via SSE. 30 s timeout, 64 KB output cap.</p>
+    <div class="diag-controls">
+        <label>Tool:
+            <select id="diag-tool" aria-label="Diagnostic tool">
+                <option value="ping">ping</option>
+                <option value="dig">dig</option>
+                <option value="traceroute">traceroute</option>
+                <option value="mtr">mtr</option>
+            </select>
+        </label>
+        <label>Interface:
+            <select id="diag-iface" aria-label="Network interface">
+                <option value="">(default)</option>
+                {% for iface in diag_interfaces %}
+                <option value="{{ iface }}">{{ iface }}{% if iface_labels.get(iface) and iface_labels.get(iface) != iface %} &mdash; {{ iface_labels.get(iface) }}{% endif %}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Target:
+            <input type="text" id="diag-target" placeholder="example.com or 8.8.8.8" aria-label="Diagnostic target host" />
+        </label>
+        <label>Count:
+            <input type="number" id="diag-count" min="1" max="10" value="4" aria-label="Probe count" />
+        </label>
+        <button id="diag-run" class="btn-primary" aria-label="Run diagnostic">Run</button>
+    </div>
+    <pre id="diag-output" class="diag-output" aria-live="polite"></pre>
+</section>
+
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

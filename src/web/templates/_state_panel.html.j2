@@ -1,0 +1,91 @@
+{# Server-rendered state panel — replaced every 5 s via hx-get + hx-swap=innerHTML on .state-panel #}
+{% set snap = snapshot %}
+{% set active_iface = snap.primary_interface if snap.current_wan == 'primary' else (snap.backup_interface if snap.current_wan == 'backup' else None) %}
+{% set active_label = iface_labels.get(active_iface, snap.current_wan|upper) if active_iface else snap.current_wan|upper %}
+<div class="state freshness-{{ snap.freshness }}">
+
+    {# === Hero: most-prominent piece of the page === #}
+    <div class="hero hero-{{ snap.current_wan }}">
+        <span class="hero-label">Current WAN</span>
+        <strong class="hero-value">{{ active_label }}</strong>
+        <span class="hero-meta">
+            {{ snap.current_wan|upper }}{% if active_iface %} &middot; {{ active_iface }}{% endif %}
+        </span>
+    </div>
+
+    {# === Freshness banner: only on missing/offline (stale is shown via header badge) === #}
+    {% if snap.freshness == 'missing' %}
+    <div class="banner banner-error" role="alert">
+        <strong>&#9888; Daemon offline.</strong> {{ target_service }} is not writing state.
+        Restart with <code>sudo systemctl restart {{ target_service }}</code>
+        or use the <em>Restart Monitor</em> button below.
+    </div>
+    {% endif %}
+
+    {# === Interface cards === #}
+    <div class="iface-grid">
+        {% for iface, m in snap.interfaces.items() %}
+        {% set is_active = (iface == snap.primary_interface and snap.current_wan == 'primary') or (iface == snap.backup_interface and snap.current_wan == 'backup') %}
+        <article class="iface iface-{{ m.role or 'unknown' }}{% if is_active %} active{% endif %}">
+            <header class="iface-head">
+                <div>
+                    <h3>{{ iface_labels.get(iface, iface) }}</h3>
+                    <small class="iface-sub">{{ iface }}{% if m.role %} &middot; {{ m.role }}{% endif %}</small>
+                </div>
+                {% if is_active %}<span class="iface-badge" title="Currently routing traffic">ACTIVE</span>{% endif %}
+            </header>
+            <dl class="metrics">
+                {# Score: 80+ ok, 40+ warn, <40 error #}
+                {% set lvl = 'none' if m.score is none else ('ok' if m.score >= 80 else ('warn' if m.score >= 40 else 'error')) %}
+                <div class="metric metric-{{ lvl }}">
+                    <dt>Score</dt>
+                    <dd>{{ m.score if m.score is not none else 'N/A' }}</dd>
+                </div>
+                <div class="metric metric-info">
+                    <dt>Quality</dt>
+                    <dd>{{ m.quality_score if m.quality_score is not none else 'N/A' }}</dd>
+                </div>
+                {% set lvl = 'none' if m.latency_ms is none else ('ok' if m.latency_ms <= 50 else ('warn' if m.latency_ms <= 150 else 'error')) %}
+                <div class="metric metric-{{ lvl }}">
+                    <dt>Latency</dt>
+                    <dd>{{ m.latency_ms if m.latency_ms is not none else 'N/A' }}<small>ms</small></dd>
+                </div>
+                {% set lvl = 'none' if m.packet_loss_pct is none else ('ok' if m.packet_loss_pct == 0 else ('warn' if m.packet_loss_pct < 5 else 'error')) %}
+                <div class="metric metric-{{ lvl }}">
+                    <dt>Loss</dt>
+                    <dd>{{ m.packet_loss_pct if m.packet_loss_pct is not none else 'N/A' }}<small>%</small></dd>
+                </div>
+                {% set lvl = 'none' if m.jitter_ms is none else ('ok' if m.jitter_ms <= 10 else ('warn' if m.jitter_ms <= 30 else 'error')) %}
+                <div class="metric metric-{{ lvl }}">
+                    <dt>Jitter</dt>
+                    <dd>{{ m.jitter_ms if m.jitter_ms is not none else 'N/A' }}<small>ms</small></dd>
+                </div>
+                {% set lvl = 'none' if m.dns_time_ms is none else ('ok' if m.dns_time_ms <= 100 else ('warn' if m.dns_time_ms <= 300 else 'error')) %}
+                <div class="metric metric-{{ lvl }}">
+                    <dt>DNS</dt>
+                    <dd>{{ m.dns_time_ms if m.dns_time_ms is not none else 'N/A' }}<small>ms</small></dd>
+                </div>
+                {% set lvl = 'none' if m.http_time_ms is none else ('ok' if m.http_time_ms <= 200 else ('warn' if m.http_time_ms <= 500 else 'error')) %}
+                <div class="metric metric-{{ lvl }}">
+                    <dt>HTTP</dt>
+                    <dd>{{ m.http_time_ms if m.http_time_ms is not none else 'N/A' }}<small>ms</small></dd>
+                </div>
+                <div class="metric metric-info metric-counters" title="Failures / Recoveries since service start">
+                    <dt>F / R</dt>
+                    <dd>
+                        <span class="counter counter-fail">{{ m.failures if m.failures is not none else '–' }}</span>
+                        <span class="counter-sep">/</span>
+                        <span class="counter counter-recover">{{ m.recoveries if m.recoveries is not none else '–' }}</span>
+                    </dd>
+                </div>
+            </dl>
+        </article>
+        {% endfor %}
+    </div>
+
+    {# === Freshness meta footer === #}
+    <div class="freshness-meta">
+        <span class="badge badge-{{ snap.freshness }}">{{ snap.freshness }}</span>
+        <span class="muted">state {{ snap.state_age_seconds }} s &middot; prom {{ snap.prom_age_seconds }} s &middot; ts {{ snap.timestamp }}</span>
+    </div>
+</div>

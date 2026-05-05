@@ -24,6 +24,14 @@ StateDirectoryMode=0750
 LogsDirectory=linux-dual-wan-failover
 LogsDirectoryMode=0755
 
+# wan-state subdirectory: shared with the optional Web-UI for the manual_action
+# file-trigger. Mode 0775 + group wan-state lets failover-web (member of that
+# group) drop the JSON request file. The chgrp is no-op when the group doesn't
+# exist (Web-UI not deployed), thanks to the leading `-`.
+ExecStartPre=/bin/mkdir -p /run/linux-dual-wan-failover/wan-state
+ExecStartPre=/bin/chmod 0775 /run/linux-dual-wan-failover/wan-state
+ExecStartPre=-/bin/chgrp wan-state /run/linux-dual-wan-failover/wan-state
+
 PIDFile=/run/linux-dual-wan-failover/failover-monitor.pid
 
 # Restart=always (not on-failure) so script-watch.sh's exit 0 on code change

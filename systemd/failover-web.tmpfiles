@@ -1,0 +1,17 @@
+# tmpfiles.d fragment for the linux-dual-wan-failover Web-UI.
+#
+# Drop this in /etc/tmpfiles.d/failover-web.conf (mode 0644, owned root:root)
+# — `install.sh --with-web-ui` does this for you.
+#
+# The wan-state group gives failover-web write-access to the failover-monitor
+# runtime directory for the manual_action.json file-trigger.
+#
+# Syntax: <type> <path> <mode> <user> <group> <age>
+
+# --- State + staging directories (failover-web's own state) ----------------
+d /var/lib/failover-web 0750 failover-web failover-web -
+d /var/lib/failover-web/staging 0750 failover-web failover-web -
+
+# --- Pre-create log files so the service does not need write access to /var/log
+f /var/log/linux-dual-wan-failover/failover-web.log 0644 failover-web failover-web -
+f /var/log/linux-dual-wan-failover/failover-web-audit.log 0644 failover-web failover-web -

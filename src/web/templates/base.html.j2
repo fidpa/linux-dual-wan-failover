@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>{% block title %}{{ project_name|default('linux-dual-wan-failover') }}{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#11161c" />
+    {# CSRF cookie is HttpOnly; JS reads the token from this meta tag. #}
+    <meta name="csrf-token" content="{{ g.csrf_token }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/failover.css') }}" />
+    <script src="{{ url_for('static', filename='vendor/htmx.min.js') }}" defer></script>
+</head>
+<body hx-headers='{"X-CSRF-Token":"{{ g.csrf_token }}"}'>
+    <main>{% block content %}{% endblock %}</main>
+    <footer role="contentinfo">
+        <small>
+            failover-monitor backend &middot;
+            <a href="/health">/health</a> &middot;
+            <a href="/api/state">/api/state</a> &middot;
+            <a href="/api/history">/api/history</a>
+        </small>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,66 @@
+# nginx upstream sample for the linux-dual-wan-failover Web-UI.
+#
+# Why a reverse proxy at all
+# --------------------------
+# The Flask app binds to 127.0.0.1:8091 only — it has no built-in TLS or
+# IP-allowlist support. nginx (or your reverse proxy of choice) is what
+# adds:
+#   - HTTPS termination (use your existing CA / Let's Encrypt setup).
+#   - LAN-only access (IP allowlist below).
+#   - X-Forwarded-For overwrite — failover-web's source-IP extractor
+#     (web/middleware/_common.py::client_ip) trusts the rightmost element
+#     ONLY because nginx overwrites it; do not switch to "append" without
+#     re-reading that comment.
+#
+# Drop this in /etc/nginx/sites-available/, edit the placeholders, then
+# enable it via a symlink in sites-enabled. The example assumes you already
+# have a server-wide TLS setup; copy the ssl_* lines from your default
+# server block if you don't.
+
+upstream failover_web_backend {
+    server 127.0.0.1:8091;
+    keepalive 16;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name failover.local;          # <-- your hostname here
+
+    # --- TLS -----------------------------------------------------------
+    ssl_certificate     /etc/ssl/certs/failover-web.crt;
+    ssl_certificate_key /etc/ssl/private/failover-web.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # --- LAN allowlist (defence-in-depth, even if the app is behind a VPN)
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 192.168.0.0/16;
+    deny  all;
+
+    # --- Generous client timeouts for the SSE endpoints
+    client_max_body_size 64k;
+    proxy_read_timeout   3600s;
+    proxy_send_timeout   60s;
+
+    # --- Strict-Transport-Security + content-type lock
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy same-origin always;
+
+    location / {
+        proxy_pass http://failover_web_backend;
+
+        # IMPORTANT: overwrite (NOT append) — failover-web reads the
+        # rightmost XFF token and assumes a single trusted upstream.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP       $remote_addr;
+        proxy_set_header Host            $host;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # SSE-friendly defaults (no buffering, keep-alive, chunked)
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+    }
+}

@@ -1,0 +1,32 @@
+# sudoers fragment for the linux-dual-wan-failover Web-UI.
+#
+# Drop this file in /etc/sudoers.d/failover-web (mode 0440, owned root:root)
+# — `install.sh --with-web-ui` does this for you.
+#
+# Risk
+# ----
+# MEDIUM:
+#   - Can restart failover-monitor.service (3-5 s service unavailable; the
+#     kernel routing table is preserved across the restart, so traffic is
+#     never dropped).
+#   - Can replace /etc/linux-dual-wan-failover/failover.conf via the
+#     root-owned validating helper (every line is re-parsed in root context
+#     before the file lands in /etc).
+#
+# IMPORTANT
+# ---------
+# failover-web has NO sudo rights for ip / nmcli / nftables / route changes.
+# All routing mutations go through the manual_action.json file-trigger
+# polled by failover-monitor.sh — this guarantees daemon-state stays
+# consistent and gives a single auditable trigger point.
+
+# --- Service control --------------------------------------------------------
+failover-web ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart failover-monitor.service
+failover-web ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active failover-monitor.service
+failover-web ALL=(ALL) NOPASSWD: /usr/bin/systemctl status failover-monitor.service
+
+# --- Config deployment ------------------------------------------------------
+# The helper takes NO arguments: source and destination paths are baked in
+# (see src/web/install-failover-conf.sh). This eliminates the path-injection
+# class of bugs that any "sudo cp" or "sudo install" rule would expose.
+failover-web ALL=(root) NOPASSWD: /usr/local/sbin/install-failover-conf

@@ -1,0 +1,74 @@
+[Unit]
+Description=linux-dual-wan-failover operations Web-UI (Flask + gunicorn)
+Documentation=file:/usr/local/lib/linux-dual-wan-failover/web/README.md
+Documentation=https://github.com/fidpa/linux-dual-wan-failover/blob/main/docs/how-to/configure-web-ui.md
+After=network.target failover-monitor.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=failover-web
+Group=failover-web
+# wan-state: write-access to RUNTIME_DIR/wan-state/manual_action.json
+#   (failover-monitor IPC, supplied by failover-monitor.service's RuntimeDirectory).
+# Add other groups here when you want the Web-UI to read additional state files
+# without granting it ownership of the runtime/state directories.
+SupplementaryGroups=wan-state
+
+WorkingDirectory=/usr/local/lib/linux-dual-wan-failover/web
+StateDirectory=failover-web
+StateDirectoryMode=0750
+LogsDirectory=linux-dual-wan-failover
+LogsDirectoryMode=0755
+
+ExecStart=/usr/local/lib/linux-dual-wan-failover/web/venv/bin/gunicorn \
+    --workers 2 --worker-class gthread --threads 4 \
+    --bind 127.0.0.1:8091 \
+    --access-logfile /var/log/linux-dual-wan-failover/failover-web.log \
+    --error-logfile /var/log/linux-dual-wan-failover/failover-web.log \
+    --timeout 35 \
+    --pythonpath /usr/local/lib/linux-dual-wan-failover/web/src \
+    web.wsgi:app
+
+Restart=on-failure
+RestartSec=10
+
+# --- Environment ---------------------------------------------------------
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="FAILOVER_WEB_PROJECT_NAME=linux-dual-wan-failover"
+Environment="FAILOVER_WEB_TARGET_SERVICE=failover-monitor.service"
+Environment="FAILOVER_WEB_PORT=8091"
+# RUNTIME_DIR mirrors failover-monitor.service's RuntimeDirectory (/run/<project>).
+Environment="FAILOVER_WEB_RUNTIME_DIR=/run/linux-dual-wan-failover"
+Environment="FAILOVER_WEB_STATE_DIR=/run/linux-dual-wan-failover/wan-state"
+Environment="FAILOVER_WEB_EVENTS_DB=/var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db"
+Environment="FAILOVER_WEB_CONFIG_PATH=/etc/linux-dual-wan-failover/failover.conf"
+Environment="FAILOVER_WEB_LOG_DIR=/var/log/linux-dual-wan-failover"
+# Set FAILOVER_WEB_CSRF_HOSTS to your reverse-proxy hostname before going
+# live. The default ("localhost,127.0.0.1") is dev-only.
+# Environment="FAILOVER_WEB_CSRF_HOSTS=failover.local,localhost"
+# Set ALERTING_BACKEND + plugin variables if you want the web-ui to mirror
+# the daemon's alerting (failback / force-failover / config changes).
+Environment="ALERTING_BACKEND=none"
+Environment="ALERTING_PLUGIN_DIR=/usr/local/lib/linux-dual-wan-failover/plugins/alerting"
+
+# --- Security hardening --------------------------------------------------
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/usr/local/lib/linux-dual-wan-failover /etc/linux-dual-wan-failover/failover.conf
+ReadWritePaths=/var/lib/failover-web /var/log/linux-dual-wan-failover /run/linux-dual-wan-failover
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

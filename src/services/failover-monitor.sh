@@ -25,6 +25,23 @@ readonly LIB_DIR
 readonly SCRIPT_VERSION="0.1.1"
 readonly PID_FILE="${PID_FILE:-/run/failover-monitor.pid}"
 
+# ---- Manual-action handshake (optional Web-UI) ----------------------------
+#
+# The Web-UI deposits an atomic JSON file in the runtime directory; we poll
+# it once per main-loop iteration. The web app cannot mutate the routing
+# table directly — every manual action funnels through this handshake so
+# the daemon stays the single owner of state.
+#
+# Default paths align with the systemd RuntimeDirectory of failover-monitor.
+# Override RUNTIME_DIR / WAN_STATE_DIR via failover.conf if you renamed
+# either of those directories.
+readonly RUNTIME_DIR="${RUNTIME_DIR:-/run/linux-dual-wan-failover}"
+readonly WAN_STATE_DIR="${WAN_STATE_DIR:-${RUNTIME_DIR}/wan-state}"
+readonly MANUAL_ACTION_FILE="${MANUAL_ACTION_FILE:-${WAN_STATE_DIR}/manual_action.json}"
+readonly MANUAL_ACTION_PROCESSED_IDS_FILE="${MANUAL_ACTION_PROCESSED_IDS_FILE:-${WAN_STATE_DIR}/manual_action_processed_ids}"
+readonly MANUAL_ACTION_MAX_AGE_SECONDS=30
+readonly MANUAL_ACTION_PROCESSED_IDS_MAX=100
+
 # ---- Library imports --------------------------------------------------------
 
 if [[ ! -f "${LIB_DIR}/common.sh" ]]; then
@@ -662,6 +679,106 @@ process_instant_failover_request() {
     fi
 }
 
+# Process a manual action request from the optional Web-UI.
+#
+# Reads ``MANUAL_ACTION_FILE`` (written atomically by failover-web), validates
+# payload, enforces freshness (≤30 s) and idempotency (request_id), then
+# dispatches to ``perform_failover`` with a ``manual_*`` reason that bypasses
+# the score-based decision constraints but still respects ANTI_FLAPPING_DELAY.
+#
+# Wire format::
+#
+#   {"action":"failback|force_failover","request_id":"<uuid>","ts":<unix_seconds>}
+#
+# Always returns 0. Failure modes are logged-only and the file is removed
+# regardless, so a malformed payload cannot pin the daemon.
+process_manual_action_request() {
+    [[ -f "$MANUAL_ACTION_FILE" ]] || return 0
+
+    if ! command -v jq >/dev/null 2>&1; then
+        log_error "process_manual_action_request: jq missing — install with 'apt install jq'"
+        return 0
+    fi
+
+    local payload action request_id ts
+    # Cap the file size so a runaway/malicious writer cannot stall the daemon.
+    payload=$(head -c 4096 "$MANUAL_ACTION_FILE" 2>/dev/null) \
+        || { rm -f "$MANUAL_ACTION_FILE"; return 0; }
+    action=$(printf '%s' "$payload" | jq -r '.action // empty' 2>/dev/null)
+    request_id=$(printf '%s' "$payload" | jq -r '.request_id // empty' 2>/dev/null)
+    ts=$(printf '%s' "$payload" | jq -r '.ts // 0' 2>/dev/null)
+
+    if [[ -z "$action" || -z "$request_id" ]]; then
+        log_warning "Manual action payload invalid (missing action/request_id), discarding"
+        rm -f "$MANUAL_ACTION_FILE"
+        return 0
+    fi
+
+    # Freshness window — anything older than 30 s is suspicious (replay or stale tab).
+    # Future timestamps (clock skew or attacker) are also rejected.
+    local now
+    now=$(date +%s)
+    if (( now - ts > MANUAL_ACTION_MAX_AGE_SECONDS )); then
+        log_warning "Manual action expired (age $((now - ts))s > ${MANUAL_ACTION_MAX_AGE_SECONDS}s), discarding $request_id"
+        rm -f "$MANUAL_ACTION_FILE"
+        return 0
+    fi
+    if (( ts > now + 60 )); then
+        log_warning "Manual action ts in the future (ts=$ts now=$now), discarding $request_id"
+        rm -f "$MANUAL_ACTION_FILE"
+        return 0
+    fi
+
+    # Idempotency — protects against double-submit when the web app retries.
+    if [[ -f "$MANUAL_ACTION_PROCESSED_IDS_FILE" ]] && \
+       grep -qFx "$request_id" "$MANUAL_ACTION_PROCESSED_IDS_FILE" 2>/dev/null; then
+        log_info "Manual action $request_id already processed, ignoring (idempotency)"
+        rm -f "$MANUAL_ACTION_FILE"
+        return 0
+    fi
+
+    invalidate_cache "$PRIMARY_IFACE"
+    invalidate_cache "$BACKUP_IFACE"
+    local primary_score backup_score
+    primary_score=$(calculate_interface_score "$PRIMARY_IFACE")
+    backup_score=$(calculate_interface_score "$BACKUP_IFACE")
+
+    case "$action" in
+        failback)
+            if [[ "$current_wan" != "backup" ]]; then
+                log_warning "Manual failback requested ($request_id) but already on primary — no-op"
+            else
+                log_info "Processing manual failback ($request_id): $PRIMARY_IFACE=$primary_score $BACKUP_IFACE=$backup_score"
+                perform_failover "$BACKUP_IFACE" "$PRIMARY_IFACE" "manual_failback" \
+                    || log_warning "Manual failback returned non-zero (likely anti-flapping)"
+            fi
+            ;;
+        force_failover)
+            if [[ "$current_wan" != "primary" ]]; then
+                log_warning "Manual force_failover requested ($request_id) but already on backup — no-op"
+            else
+                log_info "Processing manual force_failover ($request_id): $PRIMARY_IFACE=$primary_score $BACKUP_IFACE=$backup_score"
+                perform_failover "$PRIMARY_IFACE" "$BACKUP_IFACE" "manual_failover_force" \
+                    || log_warning "Manual force_failover returned non-zero (likely anti-flapping)"
+            fi
+            ;;
+        *)
+            log_warning "Unknown manual action '$action' (request $request_id), discarding"
+            ;;
+    esac
+
+    # Mark request_id as processed (keep last MANUAL_ACTION_PROCESSED_IDS_MAX).
+    mkdir -p "$(dirname "$MANUAL_ACTION_PROCESSED_IDS_FILE")" 2>/dev/null || true
+    echo "$request_id" >> "$MANUAL_ACTION_PROCESSED_IDS_FILE"
+    if [[ -f "$MANUAL_ACTION_PROCESSED_IDS_FILE" ]]; then
+        tail -n "$MANUAL_ACTION_PROCESSED_IDS_MAX" "$MANUAL_ACTION_PROCESSED_IDS_FILE" \
+            > "${MANUAL_ACTION_PROCESSED_IDS_FILE}.tmp" 2>/dev/null \
+            && mv "${MANUAL_ACTION_PROCESSED_IDS_FILE}.tmp" "$MANUAL_ACTION_PROCESSED_IDS_FILE"
+    fi
+    rm -f "$MANUAL_ACTION_FILE"
+    return 0
+}
+
 # Refresh interface scores (centralized, v4.1.1 #8)
 refresh_interface_scores() {
     connection_scores[$PRIMARY_IFACE]=$(calculate_interface_score "$PRIMARY_IFACE")
@@ -1131,6 +1248,13 @@ main() {
                 process_instant_failover_request
             fi
         fi
+
+        # Process manual action request from the optional Web-UI (file-trigger).
+        # Polled every loop iteration (~CHECK_INTERVAL, default 15 s). The web
+        # app uses a 30 s freshness window so a one-loop delay is acceptable.
+        # If failover-web is not deployed, MANUAL_ACTION_FILE never exists and
+        # this is a cheap stat() per loop.
+        process_manual_action_request
 
         # v4.1.1 #8: Centralized score refresh (prevents duplication)
         refresh_interface_scores

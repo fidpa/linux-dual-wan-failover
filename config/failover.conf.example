@@ -215,6 +215,23 @@ STATE_DIR=/var/lib/linux-dual-wan-failover
 RUNTIME_DIR=/run/linux-dual-wan-failover
 
 # ============================================================================
+# Optional Web-UI (failover-web.service)
+# ============================================================================
+# When the Web-UI is installed (`./install.sh --with-web-ui`), it reads the
+# same failover.conf as the daemon and adds a few overrides of its own. The
+# defaults below are baked into systemd/failover-web.service — change them
+# here only if you customised the directory layout.
+#
+# Set FAILOVER_WEB_CSRF_HOSTS to the hostname your reverse proxy serves the
+# UI on, separated by commas. The default ("localhost,127.0.0.1") only works
+# for local curl smoke tests.
+
+# FAILOVER_WEB_CSRF_HOSTS=failover.local,localhost
+# FAILOVER_WEB_LABEL_PRIMARY=DSL
+# FAILOVER_WEB_LABEL_BACKUP=LTE
+# FAILOVER_WEB_PROM_URL=http://prometheus.local:9090
+
+# ============================================================================
 # Toolkit lookup (optional, advanced)
 # ============================================================================
 # bash-production-toolkit provides structured logging and atomic-write helpers.

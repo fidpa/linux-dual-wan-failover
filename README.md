@@ -240,6 +240,38 @@ QUOTA_PROVIDER=none             # none | netgear-lm1200 | custom
 See [`docs/reference/config.md`](docs/reference/config.md) for the full
 reference.
 
+## Optional Web-UI
+
+If you want operator buttons (manual failback / force-failover / restart)
+plus on-demand `ping` / `dig` / `traceroute` / `mtr` and a config editor in
+a browser, install the optional Flask + gunicorn dashboard:
+
+```bash
+sudo ./install.sh --with-web-ui
+```
+
+This adds a `failover-web.service` that binds to `127.0.0.1:8091`. Sit
+your reverse proxy in front of it (the repo ships
+[`systemd/failover-web.nginx.example`](systemd/failover-web.nginx.example)
+as a starting point), point your browser at it, and you have:
+
+- live state, latency, loss, jitter, DNS/HTTP scores per interface;
+- 30-day failover event history (read-only from the metrics SQLite DB);
+- whitelisted config tuning (16 keys, range-validated, root-owned installer
+  re-validates before write);
+- 1 / 60 s rate-limit per source-IP, CSRF + Origin/Referer check, JSON-Lines
+  audit log, alerting on every mutation through the same plugin contract
+  as the daemon.
+
+The Web-UI is **opt-in**. If you don't install it, the daemon's
+`process_manual_action_request` is a cheap `stat()` per loop iteration
+when the trigger file is absent. See
+[`docs/how-to/configure-web-ui.md`](docs/how-to/configure-web-ui.md) for
+setup, [`docs/reference/web-api.md`](docs/reference/web-api.md) for the
+endpoint surface, and
+[`docs/explanation/web-ui-architecture.md`](docs/explanation/web-ui-architecture.md)
+for the privilege model and threat model.
+
 ## Plugins
 
 The repo ships two plugin slots so you don't have to fork the core to
@@ -295,14 +327,17 @@ roadmap.
 - [How-to: install from source](docs/how-to/install-from-source.md)
 - [How-to: configure Mattermost alerting](docs/how-to/configure-mattermost.md)
 - [How-to: configure quota tracking](docs/how-to/configure-quota-tracking.md)
+- [How-to: configure the optional Web-UI](docs/how-to/configure-web-ui.md)
 - [How-to: debug a failover](docs/how-to/debug-failover.md)
 - [How-to: safe failover testing](docs/how-to/safe-failover-testing.md)
 - [Reference: config variables](docs/reference/config.md)
 - [Reference: scoring algorithm](docs/reference/scoring.md)
 - [Reference: Prometheus metrics](docs/reference/metrics.md)
+- [Reference: Web-UI HTTP API](docs/reference/web-api.md)
 - [Explanation: why event-driven](docs/explanation/why-event-driven.md)
 - [Explanation: why two services for one job](docs/explanation/why-dual-service.md)
 - [Explanation: state-file ownership](docs/explanation/state-file-ownership.md)
+- [Explanation: Web-UI architecture](docs/explanation/web-ui-architecture.md)
 
 ## Contributing
 
