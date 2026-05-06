@@ -10,39 +10,32 @@
     {% include "_state_panel.html.j2" %}
 </section>
 
-<section class="controls" aria-labelledby="controls-heading">
-    <h2 id="controls-heading">Operative Controls</h2>
-    <p class="muted">All actions are audit-logged{% if alerting_enabled %} and emit an alert{% endif %}. Anti-flapping is enforced by the daemon.</p>
+<section class="controls" aria-label="Failover controls">
+    <div class="action-grid">
+        <button id="failback-btn"
+                class="btn-primary action-btn"
+                hx-post="/api/failback"
+                hx-confirm="Trigger manual failback ({{ backup_label }} &rarr; {{ primary_label }})?"
+                hx-swap="innerHTML"
+                hx-target="#action-result"
+                aria-label="Manual failback to primary interface">
+            <span class="action-icon" aria-hidden="true">&#x21bb;</span>
+            <span class="action-label">Manual Failback</span>
+            <span class="action-sub">{{ backup_label }} &rarr; {{ primary_label }}</span>
+        </button>
 
-    <button id="failback-btn"
-            class="btn-primary"
-            hx-post="/api/failback"
-            hx-confirm="Trigger manual failback ({{ backup_label }} &rarr; {{ primary_label }})?"
-            hx-swap="innerHTML"
-            hx-target="#action-result"
-            aria-label="Manual failback to primary interface">
-        Manual Failback ({{ backup_label }} &rarr; {{ primary_label }})
-    </button>
-
-    <button id="force-btn"
-            class="btn-danger"
-            hx-post="/api/force-failover"
-            hx-confirm="Force failover {{ primary_label }} &rarr; {{ backup_label }}? Traffic moves immediately."
-            hx-swap="innerHTML"
-            hx-target="#action-result"
-            aria-label="Force failover to backup interface (destructive)">
-        Force Failover ({{ primary_label }} &rarr; {{ backup_label }})
-    </button>
-
-    <button id="restart-btn"
-            class="btn-warn"
-            hx-post="/api/restart-monitor"
-            hx-confirm="Restart {{ target_service }}? (3-5 s downtime, counters reset)"
-            hx-swap="innerHTML"
-            hx-target="#action-result"
-            aria-label="Restart failover-monitor service (counters reset)">
-        Restart Monitor (resets counters)
-    </button>
+        <button id="force-btn"
+                class="btn-danger action-btn"
+                hx-post="/api/force-failover"
+                hx-confirm="Force failover {{ primary_label }} &rarr; {{ backup_label }}? Traffic moves immediately."
+                hx-swap="innerHTML"
+                hx-target="#action-result"
+                aria-label="Force failover to backup interface (destructive)">
+            <span class="action-icon" aria-hidden="true">&#x26a1;</span>
+            <span class="action-label">Force Failover</span>
+            <span class="action-sub">{{ primary_label }} &rarr; {{ backup_label }}</span>
+        </button>
+    </div>
 
     <pre id="action-result"
          class="result"

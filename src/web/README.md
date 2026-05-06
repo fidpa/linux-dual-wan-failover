@@ -68,7 +68,6 @@ src/web/
 |--------|------|-------|------------|
 | POST | `/api/failback` | 1 / 60 s | modal |
 | POST | `/api/force-failover` | 1 / 120 s | modal |
-| POST | `/api/restart-monitor` | 1 / 300 s | modal |
 | PUT | `/api/config` | 1 / 30 s | modal |
 | POST | `/api/diag/{ping\|dig\|traceroute\|mtr}` | 1 / 10 s | — (SSE) |
 

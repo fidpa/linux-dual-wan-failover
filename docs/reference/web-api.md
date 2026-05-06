@@ -170,16 +170,6 @@ Rate-limit: 1 / 120 s.
 Audit event: `force_failover_submitted` etc.
 Alert: `CRIT_FAILOVER`.
 
-### `POST /api/restart-monitor`
-
-Restarts `failover-monitor.service` via NOPASSWD sudo. The service goes
-unavailable for 3-5 s; the kernel routing table is preserved across the
-restart, so traffic is never dropped.
-
-Rate-limit: 1 / 300 s.
-Audit event: `restart_monitor_*`.
-Alert: `INFO_FAILOVER`.
-
 ### `PUT /api/config`
 
 Apply whitelisted config updates. Body is a JSON object mapping

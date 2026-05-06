@@ -88,8 +88,10 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 .hero {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 1rem 1.25rem;
+  align-items: center;
+  text-align: center;
+  gap: 0.3rem;
+  padding: 1.4rem 1.25rem;
   background: var(--bg-elev);
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -150,31 +152,13 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 }
 .iface-primary.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .iface-backup.active { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
-.iface-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 0.5rem;
-  margin-bottom: 0.6rem;
-}
-.iface-head h3 {
-  margin: 0;
-  font-size: 0.95rem;
+.iface-title {
+  margin: 0 0 0.65rem;
+  font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.01em;
+  text-align: center;
 }
-.iface-sub { color: var(--muted); font-size: 0.76rem; font-family: ui-monospace, monospace; }
-.iface-badge {
-  background: var(--accent);
-  color: #032018;
-  font-size: 0.65rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  padding: 0.15rem 0.45rem;
-  border-radius: 3px;
-  align-self: center;
-}
-.iface-backup.active .iface-badge { background: var(--warn); color: #2a2400; }
 
 /* === Metric grid ======================================================== */
 .metrics {
@@ -215,7 +199,6 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 .metric-info  { background: var(--info-bg); }
 .metric-info dd  { color: var(--info); }
 .metric-none dd { color: var(--muted); }
-.metric-counters { grid-column: span 2; }
 .counter { font-variant-numeric: tabular-nums; }
 .counter-fail { color: var(--error); }
 .counter-recover { color: var(--accent); }
@@ -227,11 +210,15 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
-  margin-top: 0.85rem;
-  padding-top: 0.65rem;
+  justify-content: center;
+  margin-top: 0.75rem;
+  padding-top: 0.55rem;
   border-top: 1px solid var(--border);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
+  opacity: 0.7;
 }
+.freshness-meta:hover { opacity: 1; }
+.freshness-meta [title] { cursor: help; border-bottom: 1px dotted currentColor; }
 
 /* === Badges ============================================================= */
 .badge {
@@ -276,6 +263,59 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; bo
 .btn-warn:hover { filter: brightness(1.05); }
 .btn-danger  { background: var(--error);  color: #fff; }
 .btn-danger:hover { filter: brightness(1.08); }
+
+/* === Action cards (Failover controls) =================================== */
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin: 0 0 0.75rem;
+}
+.action-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.4rem 1.25rem;
+  margin: 0;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out, filter 0.15s;
+}
+.action-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 60%);
+  pointer-events: none;
+}
+.action-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  filter: brightness(1.05);
+}
+.action-btn:active { transform: translateY(0); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3); }
+.action-icon {
+  font-size: 2.1rem;
+  line-height: 1;
+  opacity: 0.95;
+}
+.action-label {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.action-sub {
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  opacity: 0.8;
+}
 
 /* === Inputs ============================================================= */
 input, select {
@@ -333,8 +373,8 @@ footer a:hover { color: var(--fg-dim); }
   .hero-value { font-size: 1.5rem; }
   .iface-grid { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: 1fr; }
-  .metric-counters { grid-column: span 1; }
-  .controls button { width: 100%; margin: 0.25rem 0; }
+  .action-grid { grid-template-columns: 1fr; gap: 0.6rem; }
+  .action-btn { padding: 0.9rem 1rem; }
   td.reason { max-width: 12rem; }
 }
 

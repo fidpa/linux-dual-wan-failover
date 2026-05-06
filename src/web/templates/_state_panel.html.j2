@@ -13,12 +13,11 @@
         </span>
     </div>
 
-    {# === Freshness banner: only on missing/offline (stale is shown via header badge) === #}
+    {# === Freshness banner: only on missing/offline === #}
     {% if snap.freshness == 'missing' %}
     <div class="banner banner-error" role="alert">
         <strong>&#9888; Daemon offline.</strong> {{ target_service }} is not writing state.
-        Restart with <code>sudo systemctl restart {{ target_service }}</code>
-        or use the <em>Restart Monitor</em> button below.
+        Restart with <code>sudo systemctl restart {{ target_service }}</code>.
     </div>
     {% endif %}
 
@@ -27,13 +26,7 @@
         {% for iface, m in snap.interfaces.items() %}
         {% set is_active = (iface == snap.primary_interface and snap.current_wan == 'primary') or (iface == snap.backup_interface and snap.current_wan == 'backup') %}
         <article class="iface iface-{{ m.role or 'unknown' }}{% if is_active %} active{% endif %}">
-            <header class="iface-head">
-                <div>
-                    <h3>{{ iface_labels.get(iface, iface) }}</h3>
-                    <small class="iface-sub">{{ iface }}{% if m.role %} &middot; {{ m.role }}{% endif %}</small>
-                </div>
-                {% if is_active %}<span class="iface-badge" title="Currently routing traffic">ACTIVE</span>{% endif %}
-            </header>
+            <h3 class="iface-title">{{ iface_labels.get(iface, iface) }}</h3>
             <dl class="metrics">
                 {# Score: 80+ ok, 40+ warn, <40 error #}
                 {% set lvl = 'none' if m.score is none else ('ok' if m.score >= 80 else ('warn' if m.score >= 40 else 'error')) %}
@@ -60,6 +53,17 @@
                     <dt>Jitter</dt>
                     <dd>{{ m.jitter_ms if m.jitter_ms is not none else 'N/A' }}<small>ms</small></dd>
                 </div>
+                {# Streak counters: consecutive failed (F) / successful (R) checks.
+                   Resets when the score crosses its threshold or on a WAN switch. #}
+                <div class="metric metric-info metric-counters"
+                     title="Consecutive failed (F) / successful (R) health checks. Resets on score-threshold cross or WAN switch.">
+                    <dt>F / R</dt>
+                    <dd>
+                        <span class="counter counter-fail" aria-label="consecutive failed checks">{{ m.failures if m.failures is not none else '&ndash;' }}</span>
+                        <span class="counter-sep" aria-hidden="true">/</span>
+                        <span class="counter counter-recover" aria-label="consecutive successful checks">{{ m.recoveries if m.recoveries is not none else '&ndash;' }}</span>
+                    </dd>
+                </div>
                 {% set lvl = 'none' if m.dns_time_ms is none else ('ok' if m.dns_time_ms <= 100 else ('warn' if m.dns_time_ms <= 300 else 'error')) %}
                 <div class="metric metric-{{ lvl }}">
                     <dt>DNS</dt>
@@ -70,14 +74,6 @@
                     <dt>HTTP</dt>
                     <dd>{{ m.http_time_ms if m.http_time_ms is not none else 'N/A' }}<small>ms</small></dd>
                 </div>
-                <div class="metric metric-info metric-counters" title="Failures / Recoveries since service start">
-                    <dt>F / R</dt>
-                    <dd>
-                        <span class="counter counter-fail">{{ m.failures if m.failures is not none else '–' }}</span>
-                        <span class="counter-sep">/</span>
-                        <span class="counter counter-recover">{{ m.recoveries if m.recoveries is not none else '–' }}</span>
-                    </dd>
-                </div>
             </dl>
         </article>
         {% endfor %}
@@ -86,6 +82,10 @@
     {# === Freshness meta footer === #}
     <div class="freshness-meta">
         <span class="badge badge-{{ snap.freshness }}">{{ snap.freshness }}</span>
-        <span class="muted">state {{ snap.state_age_seconds }} s &middot; prom {{ snap.prom_age_seconds }} s &middot; ts {{ snap.timestamp }}</span>
+        <span class="muted">
+            <span title="Age of the daemon state file (written by {{ target_service }} each loop tick)">monitor {{ snap.state_age_seconds }} s</span>
+            &middot;
+            <span title="Age of the Prometheus quality file (written by the metrics-collector service)">metrics {{ snap.prom_age_seconds }} s</span>
+        </span>
     </div>
 </div>

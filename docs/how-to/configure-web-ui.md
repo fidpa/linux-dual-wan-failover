@@ -113,7 +113,6 @@ uses:
 |----------|------------|
 | `POST /api/failback` | `WARN_FAILOVER` |
 | `POST /api/force-failover` | `CRIT_FAILOVER` |
-| `POST /api/restart-monitor` | `INFO_FAILOVER` |
 | `PUT /api/config` (success) | `INFO_FAILOVER` |
 | `PUT /api/config` (installed but restart failed) | `WARN_FAILOVER` |
 
@@ -215,11 +214,10 @@ curl -s https://failover.local/api/state | jq '.current_wan, .freshness'
 
 Open `https://<your-hostname>/` in a browser. The dashboard polls
 `/api/state-html` every 5 s, renders interface cards with score / latency
-/ loss / DNS / HTTP metrics, and surfaces three operator buttons:
+/ loss / DNS / HTTP metrics, and surfaces two operator buttons:
 
 * **Manual Failback** — only valid when the daemon is currently on backup.
 * **Force Failover** — only valid when the daemon is currently on primary.
-* **Restart Monitor** — bumps the failover-monitor service (counters reset).
 
 The `Configuration` accordion lists 16 whitelisted tunables; values are
 range-checked client-side and re-validated server-side before staging.

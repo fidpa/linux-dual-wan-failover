@@ -145,7 +145,6 @@ STATE_MISSING_SECONDS: int = int(os.environ.get("FAILOVER_WEB_STATE_MISSING_SECO
 RATE_LIMITS: dict[str, str] = {
     "failback": "1 per 60 seconds",
     "force_failover": "1 per 120 seconds",
-    "restart_monitor": "1 per 300 seconds",
     "config_put": "1 per 30 seconds",
     "diag": "1 per 10 seconds",
     "charts": "60 per minute",

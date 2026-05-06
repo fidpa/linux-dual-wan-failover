@@ -1,4 +1,4 @@
-"""Integration tests for /api/force-failover and /api/restart-monitor."""
+"""Integration tests for /api/force-failover."""
 
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ def _csrf_post(client, path: str, data: dict[str, Any] | None = None, json_body:
 # /api/force-failover
 #
 # Operator confirmation is the browser `hx-confirm` dialog (consistent with
-# failback / restart). CSRF + Origin + rate-limit + audit-log are the
-# server-side defences.
+# failback). CSRF + Origin + rate-limit + audit-log are the server-side
+# defences.
 # ---------------------------------------------------------------------------
 
 
@@ -97,54 +97,6 @@ def test_force_failover_rate_limited_after_one_call(client, fresh_state, monkeyp
     first = _csrf_post(client, "/api/force-failover")
     assert first.status_code == 202
     second = _csrf_post(client, "/api/force-failover")
-    assert second.status_code == 429
-
-
-# ---------------------------------------------------------------------------
-# /api/restart-monitor
-# ---------------------------------------------------------------------------
-
-
-def test_restart_monitor_invokes_service_controller(client, fresh_state, monkeypatch):
-    sent = _patch_alerts(monkeypatch)
-    captured: dict[str, Any] = {}
-
-    def fake_restart(timeout=15.0):
-        captured["called"] = True
-        captured["timeout"] = timeout
-        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
-
-    monkeypatch.setattr("web.app.service_controller.restart_failover_monitor", fake_restart)
-
-    resp = _csrf_post(client, "/api/restart-monitor")
-    assert resp.status_code == 200
-    assert resp.get_json()["status"] == "restarted"
-    assert captured["called"] is True
-    assert sent and sent[0][0] == "INFO_FAILOVER"
-
-
-def test_restart_monitor_returns_500_on_failure(client, fresh_state, monkeypatch):
-    _patch_alerts(monkeypatch)
-    monkeypatch.setattr(
-        "web.app.service_controller.restart_failover_monitor",
-        lambda timeout=15.0: {"ok": False, "returncode": 1, "stdout": "", "stderr": "denied"},
-    )
-    resp = _csrf_post(client, "/api/restart-monitor")
-    assert resp.status_code == 500
-    body = resp.get_json()
-    assert body["error"] == "restart_failed"
-    assert body["stderr"] == "denied"
-
-
-def test_restart_monitor_rate_limit_300s(client, fresh_state, monkeypatch):
-    _patch_alerts(monkeypatch)
-    monkeypatch.setattr(
-        "web.app.service_controller.restart_failover_monitor",
-        lambda timeout=15.0: {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
-    )
-    first = _csrf_post(client, "/api/restart-monitor")
-    assert first.status_code == 200
-    second = _csrf_post(client, "/api/restart-monitor")
     assert second.status_code == 429
 
 

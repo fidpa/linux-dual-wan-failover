@@ -17,7 +17,6 @@ Mutating (CSRF + rate-limit + audit + alert):
 
   * ``POST /api/failback``           — manual failback (backup → primary)
   * ``POST /api/force-failover``     — manual failover (primary → backup)
-  * ``POST /api/restart-monitor``    — restart failover-monitor.service
   * ``PUT  /api/config``             — apply whitelisted config updates
   * ``POST /api/diag/<tool>``        — on-demand ping/dig/traceroute/mtr (SSE)
 
@@ -335,25 +334,6 @@ def create_app() -> Flask:
                 "detail": "Daemon will process within next check interval (15s).",
             }
         ), 202
-
-    @app.post("/api/restart-monitor")
-    @csrf_protect
-    @rate_limit("restart_monitor", max_calls=1, per_seconds=300)
-    def api_restart_monitor() -> ResponseReturnValue:
-        audit_log.emit("restart_monitor_requested", payload={})
-        # Use the historical name; both `restart_failover_monitor` and
-        # `restart_target_service` resolve to the same callable. Existing
-        # tests monkeypatch `web.app.service_controller.restart_failover_monitor`.
-        result = service_controller.restart_failover_monitor()
-        if not result["ok"]:
-            audit_log.emit("restart_monitor_failed", result="error", payload=result)
-            return jsonify({"error": "restart_failed", **result}), 500
-        dispatcher.send(
-            "INFO_FAILOVER",
-            f"{config.TARGET_SERVICE} restarted via web-ui (counters reset).",
-        )
-        audit_log.emit("restart_monitor_succeeded", result="ok", payload=result)
-        return jsonify({"status": "restarted", **result}), 200
 
     @app.post("/api/diag/<tool>")
     @csrf_protect
