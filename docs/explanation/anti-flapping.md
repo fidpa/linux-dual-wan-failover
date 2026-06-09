@@ -33,7 +33,7 @@ At the default `CHECK_INTERVAL=15s`:
 | fail back | 20 × 15 = **300 s** of good-score before action |
 
 Failback is harder than failover on purpose. Failback into a primary
-that *almost* works is worse than staying on a slightly-suboptimal
+that _almost_ works is worse than staying on a slightly-suboptimal
 backup.
 
 ## 3. Cooldowns
@@ -42,7 +42,7 @@ Even if the thresholds-and-counters say "switch again", the cooldowns say
 "wait":
 
 ```
-ANTI_FLAPPING_DELAY        = 600 s  (10 min between any two switches)
+ANTI_FLAPPING_DELAY        = 600 s  (10 min; failback + manual actions only — score-based failover has no cooldown)
 EMERGENCY_FAILBACK_COOLDOWN = 900 s  (15 min after an emergency-failover)
 ```
 
@@ -57,7 +57,7 @@ below `STABILITY_RESET_THRESHOLD` (default 50).
 
 The two-tier reset is here to avoid a real-world bug: setting the reset
 threshold equal to the failover threshold (60) meant any oscillation in
-the 50–75 range kept the window open *and* the failover counter rising,
+the 50–75 range kept the window open _and_ the failover counter rising,
 producing repeated failovers without clean failback. Splitting the
 reset threshold below the failover threshold lets the window survive
 borderline scores while still resetting on truly bad scores.

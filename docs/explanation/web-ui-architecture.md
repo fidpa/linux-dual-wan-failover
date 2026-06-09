@@ -30,20 +30,20 @@ Daemon  ◄─── jq parse, freshness, idempotency ◄───────�
 We could have used a Unix domain socket and gotten sub-second latency.
 We chose a file-trigger anyway, for these reasons:
 
-* **Atomicity is trivial.** `os.rename` on the same filesystem is
+- **Atomicity is trivial.** `os.rename` on the same filesystem is
   atomic by POSIX. A socket protocol needs framing, length prefixes,
   and partial-write handling to reach the same guarantee.
-* **Idempotency falls out for free.** A file holds exactly one request.
+- **Idempotency falls out for free.** A file holds exactly one request.
   Web retries reuse the request ID; the daemon's
   `MANUAL_ACTION_PROCESSED_IDS_FILE` (last 100 IDs) deduplicates without
   a session.
-* **The daemon stays the single owner of state.** Routing changes only
+- **The daemon stays the single owner of state.** Routing changes only
   happen inside `perform_failover`, never as a side-effect of the web
   process. If the web process dies mid-write, the temp-rename pattern
   ensures the daemon never sees a partial payload.
-* **Operability.** A stuck request is `cat manual_action.json` away
+- **Operability.** A stuck request is `cat manual_action.json` away
   from being diagnosed. A stuck socket is `ss -x` plus a strace.
-* **The web app can be down.** A pending failback file the daemon hasn't
+- **The web app can be down.** A pending failback file the daemon hasn't
   processed yet survives a `failover-web` crash with no special-case
   code.
 
@@ -57,22 +57,22 @@ without tightening the polling cadence.
 The dashboard has no login screen. Dropping authentication is not
 laziness — it is a recognition of what the threat model actually is:
 
-* **Network boundary.** The Flask process binds to `127.0.0.1:8091`. A
+- **Network boundary.** The Flask process binds to `127.0.0.1:8091`. A
   reverse proxy with an IP allowlist is the first gate. An attacker who
   is already on the LAN can hit the proxy; one who isn't, can't.
-* **CSRF + Origin/Referer.** Even an attacker on the same LAN browsing
+- **CSRF + Origin/Referer.** Even an attacker on the same LAN browsing
   a hostile site cannot make their browser POST to the dashboard:
   `SameSite=Strict` cookie, double-submit token, hostname check on
   Origin / Referer. The same-origin gate fails closed when the
   `FAILOVER_WEB_CSRF_HOSTS` env is empty.
-* **Rate-limit per (endpoint, source IP).** A scripted attacker who
+- **Rate-limit per (endpoint, source IP).** A scripted attacker who
   sneaks past the proxy still cannot hammer `/api/failback`; the
   bucket is 1 / 60 s. The XFF header is overwritten by the proxy
   (not appended) so the IP cannot be spoofed by upstream clients.
-* **Audit log + alerting.** Every mutation produces a JSON-Lines audit
+- **Audit log + alerting.** Every mutation produces a JSON-Lines audit
   entry and an alerting-plugin dispatch. A successful intrusion paints
   itself across both layers.
-* **Daemon anti-flapping.** Even with all else bypassed, the daemon's
+- **Daemon anti-flapping.** Even with all else bypassed, the daemon's
   `ANTI_FLAPPING_DELAY` cooldown limits how fast manual actions can
   oscillate the routing table.
 
@@ -109,14 +109,42 @@ with shell metacharacters, anything non-integer aborts. The web app
 has no way to talk into `/etc/<project>/` except through this single
 choke point.
 
+### Runtime-dir permissions are fiddlier than they look
+
+`failover-web` writes `manual_action.json` into
+`/run/<project>/wan-state/`, so that directory must be group `wan-state`
+and group-writable (`2775`). Getting there reliably is harder than it
+looks, because up to three mechanisms touch the directory and the last
+writer wins:
+
+- **systemd `RuntimeDirectory=`** recreates the runtime tree on every
+  (re)start and re-applies its own owner/mode, overriding anything an
+  earlier `ExecStartPre` set.
+- **`CapabilityBoundingSet`** on the orchestrator drops `CAP_CHOWN`, so
+  a `chgrp` that runs inside that sandbox fails silently. It needs the
+  systemd `+` prefix to run with full privileges outside the sandbox.
+- **The daemon itself** may `chmod` its state directory during init. If
+  that path overlaps the IPC directory it clobbers the group bits back.
+  Keep the daemon's state dir and the Web-UI IPC dir distinct (as we do:
+  `/var/lib/<project>` vs `/run/<project>/wan-state`), or make the daemon
+  the authoritative last-writer for the shared dir.
+
+Verify after install — and again after a daemon restart, which is when
+these interactions usually bite:
+
+```
+stat -c '%a %U:%G' /run/<project>/wan-state   # want: 2775 root:wan-state
+sudo -u failover-web test -w /run/<project>/wan-state && echo writable
+```
+
 ## What we did not build
 
-* **No charts.** The dashboard surfaces live numbers and a 30-day
+- **No charts.** The dashboard surfaces live numbers and a 30-day
   failover-event table. Long-window analytics belong in Grafana,
   reading the same `wan_quality.prom` textfile the dashboard reads.
-* **No multi-router fleet view.** The app speaks to one daemon. Run
+- **No multi-router fleet view.** The app speaks to one daemon. Run
   one instance per router and aggregate at the proxy or in Grafana.
-* **No background scheduler.** Mutations are operator-driven only.
+- **No background scheduler.** Mutations are operator-driven only.
   Cron-style automation belongs in a separate timer that posts to
   the same endpoints with its own credentials.
 

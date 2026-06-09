@@ -95,7 +95,7 @@ Open an issue with the feature-request template. Please include:
    ```
 4. Update documentation under `docs/` and add a `CHANGELOG.md` entry.
 5. Commit with a clear message.
-6. Open the PR with a description that explains *why*, not just *what*.
+6. Open the PR with a description that explains _why_, not just _what_.
 
 ## Coding Standards
 
@@ -107,7 +107,7 @@ Open an issue with the feature-request template. Please include:
 - Always quote variables: `"$var"`, not `$var`.
 - One responsibility per function (SRP).
 - 4-space indentation, no tabs.
-- Comments explain *why*, not *what*.
+- Comments explain _why_, not _what_.
 
 ### Python
 

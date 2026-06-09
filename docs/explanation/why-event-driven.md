@@ -54,7 +54,7 @@ modem re-DHCPs, for example).
 
 Three reasons:
 
-1. **NM doesn't fire events for *quality* changes.** A link that's up but
+1. **NM doesn't fire events for _quality_ changes.** A link that's up but
    rate-limited to 5 kbit/s is invisible to NM. Only the score-based
    monitor will notice and (eventually) fail over.
 2. **NM doesn't always emit the events you'd expect.** Some firmware

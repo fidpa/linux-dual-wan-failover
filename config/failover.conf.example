@@ -106,7 +106,7 @@ RECOVERY_THRESHOLD=20  # CHECK_INTERVAL × RECOVERY_THRESHOLD = ~5 min stability
 EMERGENCY_THRESHOLD=15
 
 # Cooldowns (seconds) prevent ping-pong between primary and backup.
-ANTI_FLAPPING_DELAY=600          # 10 min minimum between score-based switches
+ANTI_FLAPPING_DELAY=600          # 10 min cooldown for failback + manual actions (score-based failover has no cooldown)
 EMERGENCY_FAILBACK_COOLDOWN=900  # 15 min cooldown for emergency failback
 
 # ============================================================================

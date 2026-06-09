@@ -25,12 +25,16 @@ LogsDirectory=linux-dual-wan-failover
 LogsDirectoryMode=0755
 
 # wan-state subdirectory: shared with the optional Web-UI for the manual_action
-# file-trigger. Mode 0775 + group wan-state lets failover-web (member of that
-# group) drop the JSON request file. The chgrp is no-op when the group doesn't
-# exist (Web-UI not deployed), thanks to the leading `-`.
+# file-trigger. Mode 2775 + group wan-state lets failover-web (member of that
+# group) drop the JSON request file; the setgid bit makes manual_action.json
+# inherit the wan-state group. The chgrp uses the `+` prefix so it runs with
+# full privileges OUTSIDE this unit's sandbox — required because
+# CapabilityBoundingSet (below) drops CAP_CHOWN, so a sandboxed chgrp silently
+# fails and leaves the dir group-root (Web-UI write path broken). The `-` keeps
+# it a no-op when the group is absent (Web-UI not deployed).
 ExecStartPre=/bin/mkdir -p /run/linux-dual-wan-failover/wan-state
-ExecStartPre=/bin/chmod 0775 /run/linux-dual-wan-failover/wan-state
-ExecStartPre=-/bin/chgrp wan-state /run/linux-dual-wan-failover/wan-state
+ExecStartPre=/bin/chmod 02775 /run/linux-dual-wan-failover/wan-state
+ExecStartPre=+-/bin/chgrp wan-state /run/linux-dual-wan-failover/wan-state
 
 PIDFile=/run/linux-dual-wan-failover/failover-monitor.pid
 

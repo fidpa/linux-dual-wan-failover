@@ -7,15 +7,15 @@ route to the `127.0.0.1:8091` upstream.
 
 ## Conventions
 
-* Every read-only endpoint returns JSON unless explicitly noted.
-* Every mutating endpoint requires:
+- Every read-only endpoint returns JSON unless explicitly noted.
+- Every mutating endpoint requires:
   - a matching CSRF token (cookie + `X-CSRF-Token` header), and
   - an `Origin` or `Referer` whose hostname is in
     `FAILOVER_WEB_CSRF_HOSTS` (see
     [`docs/how-to/configure-web-ui.md`](../how-to/configure-web-ui.md)).
-* Mutations are rate-limited per `(endpoint, source-IP)`. Replies on
+- Mutations are rate-limited per `(endpoint, source-IP)`. Replies on
   rate-limit hit are HTTP 429 with `Retry-After` and a JSON body.
-* Every mutation generates an entry in
+- Every mutation generates an entry in
   `/var/log/linux-dual-wan-failover/failover-web-audit.log` (JSON-Lines)
   and dispatches an alert through the configured alerting plugin.
 
@@ -81,8 +81,8 @@ per-IP cap (`FAILOVER_WEB_SSE_MAX_PER_IP`, default 3) is exhausted.
 
 Returns recent failover events from the SQLite event store.
 
-* `days` clamped to `[1, 365]`, default 30.
-* `limit` clamped to `[1, 5000]`, default 1000.
+- `days` clamped to `[1, 365]`, default 30.
+- `limit` clamped to `[1, 5000]`, default 1000.
 
 ```json
 {
@@ -207,11 +207,11 @@ Tool ∈ `{ping, dig, traceroute, mtr}`. Body:
 {"target": "8.8.8.8", "iface": "eth0", "count": 4}
 ```
 
-* `target` must match `^[A-Za-z0-9][A-Za-z0-9._\-:]{0,253}$` (no shell
+- `target` must match `^[A-Za-z0-9][A-Za-z0-9._\-:]{0,253}$` (no shell
   metacharacters).
-* `iface` is optional; it must be in `FAILOVER_WEB_DIAG_INTERFACES`
+- `iface` is optional; it must be in `FAILOVER_WEB_DIAG_INTERFACES`
   (defaults to `(PRIMARY_IFACE, BACKUP_IFACE)`).
-* `count` clamped to `[1, 10]`.
+- `count` clamped to `[1, 10]`.
 
 Response is a Server-Sent Events stream:
 

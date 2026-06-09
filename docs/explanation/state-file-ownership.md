@@ -57,10 +57,10 @@ they get a consistent snapshot.
 
 ## What about `flock`?
 
-The lockfile (`failover-in-progress.lock`) is a *coordination* primitive,
+The lockfile (`failover-in-progress.lock`) is a _coordination_ primitive,
 not an exclusion lock. Its presence means "the route table is being
 modified emergency-style; please don't second-guess the routes for the
-next 30 seconds, route-guardian." Removing it is the *signal* that the
+next 30 seconds, route-guardian." Removing it is the _signal_ that the
 emergency window is over.
 
 `flock` is not used here because there is no need to serialize writes — there

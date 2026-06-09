@@ -5,6 +5,30 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-06-10
+
+### Fixed
+
+- **Web-UI write path: `failover-web` could not write `manual_action.json`.**
+  The `chgrp wan-state` on `/run/<project>/wan-state` ran inside the
+  orchestrator unit's sandbox, where `CapabilityBoundingSet` drops
+  `CAP_CHOWN` — so the group ownership silently stayed `root`, the
+  group-writable bit was useless, and the dashboard's failback /
+  force-failover buttons returned a write error. The `ExecStartPre`
+  chgrp now uses the systemd `+` prefix to run with full privileges
+  outside the sandbox, and the directory is `02775` (setgid) so
+  `manual_action.json` inherits the `wan-state` group.
+
+### Changed
+
+- **Anti-flapping docs now match the implementation.** `ANTI_FLAPPING_DELAY`
+  (600 s) is the cooldown for *failback and manual actions only* —
+  score-based failover has no cooldown (it is covered by
+  `FAILURE_THRESHOLD`, `MIN_BACKUP_TIME`, `MIN_STABLE_DURATION`, and the
+  emergency exemption). Corrected the config-example comments,
+  `docs/explanation/anti-flapping.md`, and a stale daemon log line that
+  printed "300s cooldown" while enforcing 600 s.
+
 ## [0.2.0] — 2026-05-05
 
 ### Added
@@ -170,7 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 
 - **CI green across all jobs.** Resolved `bashate` (trailing whitespace
-  + two `while …; do true; done` patterns rewritten to multi-line form),
+  - two `while …; do true; done` patterns rewritten to multi-line form),
   `ruff check` (unused `time` import, two f-strings without placeholders)
   and `ruff format`, and `shellcheck` warnings (`unset` array-key
   quoting in `lib/performance.sh`, declare/assign separation and

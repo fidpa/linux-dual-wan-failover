@@ -875,7 +875,7 @@ perform_failover() {
         if [[ $time_since_last -lt $ANTI_FLAPPING_DELAY ]]; then
             local remaining
             remaining=$((ANTI_FLAPPING_DELAY - time_since_last))
-            log_warning "Failback suppressed by anti-flapping (${remaining}s remaining of 300s cooldown, last failover was ${time_since_last}s ago)"
+            log_warning "Failback suppressed by anti-flapping (${remaining}s remaining of 600s cooldown, last failover was ${time_since_last}s ago)"
             return 0  # Anti-flapping is not an error - return success to prevent service crash
         fi
     elif [[ "$reason" == "instant_event" ]]; then

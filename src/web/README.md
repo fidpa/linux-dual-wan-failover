@@ -109,11 +109,11 @@ Idempotency store: `${MANUAL_ACTION_PROCESSED_IDS_FILE}` (last 100 IDs).
 
 ## Setup + further reading
 
-* **`docs/how-to/configure-web-ui.md`** — install runbook, reverse-proxy
+- **`docs/how-to/configure-web-ui.md`** — install runbook, reverse-proxy
   setup, CSRF host configuration, Mattermost wiring.
-* **`docs/reference/web-api.md`** — every endpoint, payload schema, status
+- **`docs/reference/web-api.md`** — every endpoint, payload schema, status
   codes, audit-log shape.
-* **`docs/explanation/web-ui-architecture.md`** — why a file-trigger
+- **`docs/explanation/web-ui-architecture.md`** — why a file-trigger
   rather than a Unix socket, the privilege model, the threat model.
 
 ## Local development

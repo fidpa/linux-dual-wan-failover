@@ -26,7 +26,7 @@ you've probably hit one of these problems:
   modems.
 - **`mwan3` (OpenWrt)** is good but tied to OpenWrt's network stack —
   hard to integrate on a standard Linux box.
-- **`keepalived` / `VRRP`** is for active-active HA between *routers*, not
+- **`keepalived` / `VRRP`** is for active-active HA between _routers_, not
   for steering a single router between two upstream uplinks.
 - **Manually scripting it** with `ping` + `ip route` works until the first
   flapping link, where you discover anti-flap, hysteresis, race conditions
@@ -240,11 +240,11 @@ QUOTA_PROVIDER=none             # none | netgear-lm1200 | custom
 See [`docs/reference/config.md`](docs/reference/config.md) for the full
 reference.
 
-## Optional Web-UI
+## Web-UI
 
-If you want operator buttons (manual failback / force-failover / restart)
-plus on-demand `ping` / `dig` / `traceroute` / `mtr` and a config editor in
-a browser, install the optional Flask + gunicorn dashboard:
+If you want operator buttons (manual failback / force-failover) plus
+on-demand `ping` / `dig` / `traceroute` / `mtr` and a config editor in
+a browser, install the Flask + gunicorn dashboard:
 
 ```bash
 sudo ./install.sh --with-web-ui
@@ -327,7 +327,7 @@ roadmap.
 - [How-to: install from source](docs/how-to/install-from-source.md)
 - [How-to: configure Mattermost alerting](docs/how-to/configure-mattermost.md)
 - [How-to: configure quota tracking](docs/how-to/configure-quota-tracking.md)
-- [How-to: configure the optional Web-UI](docs/how-to/configure-web-ui.md)
+- [How-to: configure the Web-UI](docs/how-to/configure-web-ui.md)
 - [How-to: debug a failover](docs/how-to/debug-failover.md)
 - [How-to: safe failover testing](docs/how-to/safe-failover-testing.md)
 - [Reference: config variables](docs/reference/config.md)

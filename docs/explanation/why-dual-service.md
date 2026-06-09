@@ -55,7 +55,7 @@ running with its scoring loop intact.
 The event detector wants `Restart=always` (events are continuous; downtime
 between restarts means missed events).
 
-The orchestrator wants `Restart=always` *with* `RestartSec=10s` (so a
+The orchestrator wants `Restart=always` _with_ `RestartSec=10s` (so a
 config bug doesn't burn CPU restarting in a tight loop, since most
 restart causes are config errors that won't fix themselves).
 

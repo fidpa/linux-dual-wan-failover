@@ -9,7 +9,7 @@ need it. This document is the safe way to do that.
 sudo ip link set eth0 down
 ```
 
-It will *probably* work, but the orchestrator never sees a NetworkManager
+It will _probably_ work, but the orchestrator never sees a NetworkManager
 event for it (since you bypassed NM). NM and the kernel disagree about the
 link state, conntrack state survives the change, and SSH connections may
 hang for 15+ minutes with no recovery short of a physical console.

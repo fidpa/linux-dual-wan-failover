@@ -1,7 +1,7 @@
 # How-to: configure quota tracking
 
 If your backup link is metered (e.g. an LTE modem on a 50 GB/month plan),
-you want the failover stack to *know* when you're approaching the cap so
+you want the failover stack to _know_ when you're approaching the cap so
 it doesn't merrily route traffic to LTE while a flaky-but-not-dead DSL
 struggles along.
 
@@ -107,7 +107,7 @@ LAST_RESORT_ENABLED=true
 LAST_RESORT_PRIMARY_THRESHOLD=25
 ```
 
-When the primary's score drops below 25 *and* the quota cap would block
+When the primary's score drops below 25 _and_ the quota cap would block
 failover, the orchestrator overrides the cap and fails over anyway,
 emitting a CRIT_FAILOVER alert so you can see it happened. Off by
 default — most operators prefer a known outage to a surprise overage

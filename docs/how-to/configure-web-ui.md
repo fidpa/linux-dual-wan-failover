@@ -1,8 +1,8 @@
 # Configure the Web-UI
 
-The optional Web-UI ships in `src/web/`. It is a Flask + gunicorn dashboard
+The Web-UI ships in `src/web/`. It is a Flask + gunicorn dashboard
 that visualises `failover-monitor` state and exposes operator buttons for
-manual failback, force-failover, monitor-restart, and config-editing.
+manual failback, force-failover, and config-editing.
 
 > **Authentication is intentionally absent.** The web app is meant to sit
 > behind a reverse proxy on a LAN-only host. The defence-in-depth layers
@@ -13,13 +13,13 @@ manual failback, force-failover, monitor-restart, and config-editing.
 
 ## Prerequisites
 
-* `linux-dual-wan-failover` already installed and the four core services
+- `linux-dual-wan-failover` already installed and the four core services
   running (see [`tutorial/01-quickstart.md`](../tutorial/01-quickstart.md)).
-* Python 3.10+ with the `venv` module
+- Python 3.10+ with the `venv` module
   (`apt install python3-venv` on Debian/Ubuntu).
-* `jq` available on `$PATH` (used by the daemon to parse the manual-action
+- `jq` available on `$PATH` (used by the daemon to parse the manual-action
   payload).
-* A reverse proxy you can put in front of `127.0.0.1:8091`. The repo ships
+- A reverse proxy you can put in front of `127.0.0.1:8091`. The repo ships
   an nginx example at [`systemd/failover-web.nginx.example`](../../systemd/failover-web.nginx.example);
   Caddy/Traefik/HAProxy work just as well — see "Other reverse proxies"
   below.
@@ -34,16 +34,16 @@ sudo ./install.sh --with-web-ui
 
 The flag adds these steps to the regular install:
 
-* Creates the `wan-state` and `failover-web` system groups + user
+- Creates the `wan-state` and `failover-web` system groups + user
   (`failover-web` is in both, no shell, no home).
-* Copies `src/web/` to `/usr/local/lib/linux-dual-wan-failover/web/src/`.
-* Creates a venv at `/usr/local/lib/linux-dual-wan-failover/web/venv/`
+- Copies `src/web/` to `/usr/local/lib/linux-dual-wan-failover/web/src/`.
+- Creates a venv at `/usr/local/lib/linux-dual-wan-failover/web/venv/`
   and installs `src/web/requirements.txt`.
-* Installs the validating config helper to
+- Installs the validating config helper to
   `/usr/local/sbin/install-failover-conf` (mode `0750`, owned `root:root`).
-* Installs `failover-web.service`, the sudoers fragment, and the
+- Installs `failover-web.service`, the sudoers fragment, and the
   tmpfiles fragment.
-* Reloads systemd; the service is **not** enabled — that is your call.
+- Reloads systemd; the service is **not** enabled — that is your call.
 
 The daemon's `failover-monitor.service` is updated by `install_systemd_units`
 to create the `wan-state` subdirectory under its `RuntimeDirectory` with
@@ -160,9 +160,9 @@ proxy_read_timeout 3600s;
 
 The same constraints apply to Caddy, Traefik, and HAProxy:
 
-* Overwrite (do not append) `X-Forwarded-For`.
-* Allow long-lived connections (SSE pipe lifetime > 60 s).
-* Restrict via your platform's IP allowlist mechanism.
+- Overwrite (do not append) `X-Forwarded-For`.
+- Allow long-lived connections (SSE pipe lifetime > 60 s).
+- Restrict via your platform's IP allowlist mechanism.
 
 A minimal Caddyfile:
 
@@ -216,8 +216,8 @@ Open `https://<your-hostname>/` in a browser. The dashboard polls
 `/api/state-html` every 5 s, renders interface cards with score / latency
 / loss / DNS / HTTP metrics, and surfaces two operator buttons:
 
-* **Manual Failback** — only valid when the daemon is currently on backup.
-* **Force Failover** — only valid when the daemon is currently on primary.
+- **Manual Failback** — only valid when the daemon is currently on backup.
+- **Force Failover** — only valid when the daemon is currently on primary.
 
 The `Configuration` accordion lists 16 whitelisted tunables; values are
 range-checked client-side and re-validated server-side before staging.
@@ -258,9 +258,9 @@ Web-UI is gone — the `process_manual_action_request` function is a cheap
 
 ## See also
 
-* [`docs/reference/web-api.md`](../reference/web-api.md) — endpoint
+- [`docs/reference/web-api.md`](../reference/web-api.md) — endpoint
   reference + payload schemas.
-* [`docs/explanation/web-ui-architecture.md`](../explanation/web-ui-architecture.md) —
+- [`docs/explanation/web-ui-architecture.md`](../explanation/web-ui-architecture.md) —
   privilege model, file-trigger rationale, threat model.
-* [`src/web/README.md`](../../src/web/README.md) — module layout and
+- [`src/web/README.md`](../../src/web/README.md) — module layout and
   developer-mode setup.
