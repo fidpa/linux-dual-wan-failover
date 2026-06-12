@@ -81,6 +81,14 @@ emergency_failover_time=0
 # ============================================================================
 
 # Initialize cache structures
+# NOTE (upstream review finding): these caches are effectively inert in
+# production. calculate_interface_score is only ever invoked via $(...)
+# command substitution — every write to ping_cache/dns_cache/cache_timestamps/
+# cache_hits happens in the subshell and is lost with it (verified live:
+# permanently "0% hit rate (0/0), 0 entries"). With CACHE_TTL (15s) ==
+# CHECK_INTERVAL (15s) the benefit would be minimal even if they worked.
+# Kept rather than invasively refactored — the score-to-stdout architecture
+# is deeply wired in; correctness is unaffected.
 init_cache_structures() {
     ping_cache=()
     cache_timestamps=()

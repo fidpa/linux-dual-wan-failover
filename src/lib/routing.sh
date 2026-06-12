@@ -45,11 +45,18 @@ readonly ROUTE_VERIFICATION_TIMEOUT=10
 # shellcheck disable=SC2034 # public library default
 readonly MAX_ROUTE_RETRIES=3
 
+# Route-guardian coordination. Format PID_TIMESTAMP — route-guardian pauses
+# its route checks while the file exists (stale cleanup >60s plus ownership
+# check prevent zombie locks, see route-guardian's _failover_lock_active).
+readonly FAILOVER_LOCKFILE="/run/failover-in-progress.lock"
+readonly FAILOVER_LOCKFILE_HOLD_SECONDS=30  # covers NM DHCP straggler events
+
 # Failover state tracking
 current_active_interface=""
 last_failover_timestamp=0
 # shellcheck disable=SC2034 # used by sourcing scripts
 failover_in_progress=false
+_failover_lock_id=""
 
 # ============================================================================
 # MODULE MAP — 15 Funktionen in 6 Gruppen
@@ -60,9 +67,10 @@ failover_in_progress=false
 #    restore_routes_from_backup()   ip route restore aus Backup-File
 #
 # 2. ROUTE EXECUTION — Route-Wechsel durchführen (→ Zeile 145)
-#    safe_route_change()            Route-Change mit Backup + Rollback
+#    safe_route_change()            Route-Change mit Lockfile + Backup + Rollback
 #    execute_route_change()         ip route del/add mit korrekter Metrik
-#    restore_missing_backup_route() Monitoring-only (Route Guardian v2.0 managed)
+#    _create_failover_lockfile()    Route-Guardian-Pause (PID_TIMESTAMP)
+#    _release_failover_lockfile()   Lock-Freigabe sofort/verzögert mit Ownership-Check
 #
 # 3. ROUTE VERIFICATION — Erfolg prüfen (→ Zeile 259)
 #    verify_route_change()          5 Attempts Connectivity-Test nach Change
@@ -73,8 +81,8 @@ failover_in_progress=false
 #    emergency_restore_any_route()  DSL oder LTE Route wiederherstellen (v3.5)
 #
 # 5. GATEWAY MANAGEMENT — Gateway-IP ermitteln (→ Zeile 362)
-#    get_gateway_for_interface()    ip route + DHCP Fallback
-#    get_gateway_from_dhcp()        DHCP-Lease-File parsen
+#    get_gateway_for_interface()    ip route + NetworkManager Fallback
+#    get_gateway_from_nm()          nmcli IP4.GATEWAY abfragen
 #
 # 6. STATE & LOGGING — Zustand und Protokollierung
 #    init_routing_state()           Active-WAN + Last-Failover laden
@@ -124,7 +132,12 @@ restore_routes_from_backup() {
     # Only remove default routes — never `ip route flush all`. The latter
     # also drops link-scope LAN and out-of-band management routes, which
     # has caused SSH lockouts in the past.
-    ip route del default 2>/dev/null || true
+    # Remove ALL default routes: a single `ip route del default` left the
+    # second WAN route in place, making the subsequent `ip route restore`
+    # fail with "File exists" (rollback failure → emergency-recovery path).
+    while ip route del default 2>/dev/null; do
+        :
+    done
 
     # Restore from backup
     if ip route restore < "$backup_file" 2>/dev/null; then
@@ -141,7 +154,50 @@ restore_routes_from_backup() {
 # ROUTE EXECUTION
 # ============================================================================
 
-# Perform route change with automatic rollback on failure
+# Create the route-guardian pause lockfile (PID_TIMESTAMP ownership).
+# Non-fatal on failure — the failover must proceed even if /run is unwritable.
+_create_failover_lockfile() {
+    _failover_lock_id="$$_$(date +%s)"
+    if echo "$_failover_lock_id" > "$FAILOVER_LOCKFILE" 2>/dev/null; then
+        log "DEBUG" "Failover lockfile created: $_failover_lock_id"
+    else
+        log "WARNING" "Failed to create failover lockfile - route-guardian may interfere during route change"
+        _failover_lock_id=""
+    fi
+}
+
+# Release the lockfile — immediately (delay=0, error path) or after a
+# stabilization window (delay>0, success path, backgrounded). The ownership
+# check prevents deleting a lockfile created by a newer failover or by the
+# nmcli emergency path.
+_release_failover_lockfile() {
+    local delay="${1:-0}"
+    local lock_id="$_failover_lock_id"
+    [[ -n "$lock_id" ]] || return 0
+    _failover_lock_id=""
+
+    if [[ "$delay" -gt 0 ]]; then
+        (
+            sleep "$delay"
+            if [[ "$(cat "$FAILOVER_LOCKFILE" 2>/dev/null)" == "$lock_id" ]]; then
+                rm -f "$FAILOVER_LOCKFILE" 2>/dev/null
+            fi
+        ) &
+    else
+        if [[ "$(cat "$FAILOVER_LOCKFILE" 2>/dev/null)" == "$lock_id" ]]; then
+            rm -f "$FAILOVER_LOCKFILE" 2>/dev/null
+        fi
+    fi
+    return 0
+}
+
+# Perform route change with automatic rollback on failure.
+#
+# No ERR trap here (by design): it fired IN ADDITION to the explicit
+# rollback calls (e.g. on an empty get_gateway_for_interface result),
+# producing a double rollback against an already-deleted backup file and a
+# false-positive "manual intervention required" cascade. The explicit error
+# paths below cover every failure mode.
 safe_route_change() {
     local new_interface="$1"
     local old_interface="$2"
@@ -150,23 +206,24 @@ safe_route_change() {
     log "INFO" "Starting safe route change: $old_interface -> $new_interface"
 
     # Create backup of current routes
-    backup_file=$(backup_current_routes)
-    if [[ $? -ne 0 ]]; then
+    if ! backup_file=$(backup_current_routes); then
         log "ERROR" "Failed to backup routes - aborting route change"
         return 1
     fi
 
-    # Setup rollback trap
-    # shellcheck disable=SC2064 # backup_file must expand now, not at signal time
-    trap "rollback_route_change '$backup_file'" ERR
+    # Pause route-guardian for the duration of the orchestration. Without
+    # this, the guardian (10s loop) can revert a fresh metric swap in the
+    # window before active_wan is persisted.
+    _create_failover_lockfile
 
     # Get gateway for new interface
     local new_gateway
-    new_gateway=$(get_gateway_for_interface "$new_interface")
+    new_gateway=$(get_gateway_for_interface "$new_interface") || true
 
     if [[ -z "$new_gateway" ]]; then
         log "ERROR" "No gateway found for interface: $new_interface"
         rollback_route_change "$backup_file"
+        _release_failover_lockfile 0
         return 1
     fi
 
@@ -176,16 +233,20 @@ safe_route_change() {
         if verify_route_change "$new_interface" "$new_gateway"; then
             log "INFO" "Route change successful and verified"
             rm -f "$backup_file"
-            trap - ERR
+            # Hold the lock through the stabilization window (NM may re-add
+            # routes up to ~1s after link events; 30s = 3 guardian cycles).
+            _release_failover_lockfile "$FAILOVER_LOCKFILE_HOLD_SECONDS"
             return 0
         else
             log "ERROR" "Route change verification failed"
             rollback_route_change "$backup_file"
+            _release_failover_lockfile 0
             return 1
         fi
     else
         log "ERROR" "Route change execution failed"
         rollback_route_change "$backup_file"
+        _release_failover_lockfile 0
         return 1
     fi
 }
@@ -275,35 +336,9 @@ execute_route_change() {
     fi
 }
 
-# Restore missing backup route after failover change
-restore_missing_backup_route() {
-    # shellcheck disable=SC2034 # kept for API compatibility; monitoring-only since v2.0
-    local changed_interface="$1"
-
-    # Define expected routes
-    local dsl_gateway="192.0.2.1"
-    local lte_gateway="192.0.2.10"  # Netgear LM1200 Bridge-Mode Management IP
-    local primary_iface="${PRIMARY_IFACE:-eth0}"
-    local backup_iface="${BACKUP_IFACE:-lte0}"
-
-    # DISABLED: Route addition now managed by Route Guardian v2.0
-    # Architecture Fix (03.09.2025): WAN-Monitor focuses on Interface-Scoring only
-    # Route Guardian v2.0 handles all Default-Route management for consistency
-
-    # Check if DSL route exists (including DHCP variants) - MONITORING ONLY
-    if ! ip route show | grep -qE "^default via $dsl_gateway dev $primary_iface.*(metric 50|proto dhcp.*metric 50)"; then
-        log "INFO" "DSL route managed by Route Guardian v2.0 (metric 50)"
-        # DISABLED: ip route add default via "$dsl_gateway" dev "$primary_iface" metric 100 2>/dev/null || true
-    fi
-
-    # Check if LTE route exists (including DHCP variants) - MONITORING ONLY
-    if ! ip route show | grep -qE "^default via $lte_gateway dev $backup_iface.*(metric 200|proto dhcp.*metric 200)"; then
-        log "INFO" "LTE route managed by Route Guardian v2.0 + NetworkManager (metric 200)"
-        # DISABLED: ip route add default via "$lte_gateway" dev "$backup_iface" metric 200 2>/dev/null || true
-    fi
-
-    log "DEBUG" "Backup route restoration completed"
-}
+# restore_missing_backup_route() removed: monitoring-only since route-guardian
+# took over default-route management, no callers, and its inverted log logic
+# ("route managed by guardian" when the route was MISSING) was misleading.
 
 # ============================================================================
 # ROUTE VERIFICATION
@@ -369,7 +404,6 @@ rollback_route_change() {
     local backup_file="$1"
 
     log "WARNING" "Rolling back route change"
-    trap - ERR
 
     if restore_routes_from_backup "$backup_file"; then
         log "INFO" "Route rollback completed successfully"
@@ -385,6 +419,22 @@ rollback_route_change() {
     fi
 }
 
+# Local link check — UP state + carrier via sysfs.
+# emergency_restore_any_route() previously called check_interface_status(),
+# which is defined ONLY in route-guardian.sh (a separate process). Inside the
+# failover-monitor process that meant `command not found` → both restore
+# attempts were silently skipped → the emergency net never worked.
+_interface_link_up() {
+    local interface="$1"
+    [[ -n "$interface" ]] || return 1
+    ip link show "$interface" 2>/dev/null | grep -q "state UP" || return 1
+    local carrier_file="/sys/class/net/${interface}/carrier"
+    if [[ -r "$carrier_file" ]]; then
+        [[ "$(cat "$carrier_file" 2>/dev/null)" == "1" ]] || return 1
+    fi
+    return 0
+}
+
 # v3.5: Emergency Recovery - restore at least one default route
 # Called when backup restoration fails to prevent total connectivity loss
 emergency_restore_any_route() {
@@ -398,7 +448,7 @@ emergency_restore_any_route() {
 
     # Try DSL first (preferred) — always use normal metric (clean state in emergency)
     local primary_metric="${PRIMARY_METRIC_NORMAL:-50}"
-    if check_interface_status "$primary_iface" 2>/dev/null; then
+    if _interface_link_up "$primary_iface"; then
         log "INFO" "EMERGENCY: Attempting DSL route restoration"
         if ip route add default via "$dsl_gateway" dev "$primary_iface" metric "$primary_metric" 2>/dev/null; then
             log "WARNING" "EMERGENCY: DSL route restored (metric $primary_metric)"
@@ -409,7 +459,7 @@ emergency_restore_any_route() {
     fi
 
     # Fallback to LTE
-    if check_interface_status "$backup_iface" 2>/dev/null; then
+    if _interface_link_up "$backup_iface"; then
         log "INFO" "EMERGENCY: Attempting LTE route restoration"
         if ip route add default via "$lte_gateway" dev "$backup_iface" metric 200 2>/dev/null; then
             log "WARNING" "EMERGENCY: LTE route restored (metric 200)"
@@ -443,11 +493,13 @@ get_gateway_for_interface() {
         return 0
     fi
 
-    # If no default route, try to get from DHCP lease
-    gateway=$(get_gateway_from_dhcp "$interface")
+    # If no default route, ask NetworkManager (was: dhclient lease files,
+    # which never exist on NM systems using the internal DHCP client —
+    # the fallback was dead code on every supported target)
+    gateway=$(get_gateway_from_nm "$interface")
 
     if [[ -n "$gateway" ]]; then
-        log "DEBUG" "Gateway from DHCP for $interface: $gateway"
+        log "DEBUG" "Gateway from NetworkManager for $interface: $gateway"
         echo "$gateway"
         return 0
     fi
@@ -456,16 +508,10 @@ get_gateway_for_interface() {
     return 1
 }
 
-# Get gateway from DHCP lease information
-get_gateway_from_dhcp() {
+# Get gateway from NetworkManager device state (DHCP-lease-derived)
+get_gateway_from_nm() {
     local interface="$1"
-    local lease_file="/var/lib/dhcp/dhclient.${interface}.leases"
-
-    if [[ -f "$lease_file" ]]; then
-        local gateway
-        gateway=$(grep "option routers" "$lease_file" | tail -1 | awk '{print $3}' | tr -d ';')
-        echo "$gateway"
-    fi
+    nmcli -g IP4.GATEWAY device show "$interface" 2>/dev/null | head -1
 }
 
 # ============================================================================

@@ -1,15 +1,25 @@
-"""Apply validated config updates to ``failover.conf``.
+"""Apply validated config updates to ``failover-overrides.conf``.
 
-Pipeline:
+Pipeline (override design):
 
   1. flock ``CONFIG_LOCK`` — only one writer at a time.
-  2. Read current ``CONFIG_PATH``.
-  3. Replace each accepted ``KEY=value`` line in-place; preserve comments
-     and the original line order.
+  2. Read current ``OVERRIDE_CONFIG_PATH`` (missing file = bootstrap header).
+  3. Replace each accepted ``KEY=value`` line in-place; append new keys.
   4. Write to the staging file (owned by failover-web).
-  5. Invoke the root-owned validating installer (``INSTALL_HELPER``).
+  5. Invoke the root-owned validating installer (``INSTALL_HELPER``) — it
+     re-validates EVERY line (whitelist keys, integers only) and atomically
+     installs the override file.
   6. Restart ``TARGET_SERVICE``.
   7. Verify the daemon is active.
+
+The base config (``CONFIG_PATH``) is never written by the web app. The
+daemon sources base first, then the override file (bash last-wins). This is
+also what makes the install helper's strict whitelist workable: the full
+base config contains non-whitelisted keys (interfaces, test targets) that
+would always fail its per-line validation — the override file by
+construction only ever contains whitelisted integer tunables. Resetting a
+value to the base default leaves an explicit override line behind —
+harmless, remove manually if desired.
 """
 
 from __future__ import annotations
@@ -137,12 +147,19 @@ def apply_updates(accepted: dict[str, int]) -> dict[str, Any]:
 
     with _lock(config.CONFIG_LOCK):
         try:
-            current = config.CONFIG_PATH.read_text(encoding="utf-8")
-        except (FileNotFoundError, PermissionError, OSError) as exc:
+            current = config.OVERRIDE_CONFIG_PATH.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            # First override ever — start from an empty file with a header.
+            current = (
+                "# failover-overrides.conf — operator overrides via the web UI\n"
+                "# Sourced by the daemon AFTER failover.conf (last-wins).\n"
+                "# Integer tunables only; root-validated by install-failover-conf.\n"
+            )
+        except (PermissionError, OSError) as exc:
             return {
                 "status": "error",
                 "applied": [],
-                "detail": f"cannot read {config.CONFIG_PATH}: {exc}",
+                "detail": f"cannot read {config.OVERRIDE_CONFIG_PATH}: {exc}",
             }
 
         try:

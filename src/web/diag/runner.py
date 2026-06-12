@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import time
 from collections.abc import Iterator
 from typing import IO, cast
 
@@ -76,17 +77,30 @@ def stream_command(argv: list[str]) -> Iterator[str]:
 
     bytes_yielded = 0
     truncated = False
+    # The deadline covers the WHOLE run. Previously the timeout only applied
+    # to proc.wait() AFTER the read loop — a slowly-dripping traceroute could
+    # stream for 60-90s despite DIAG_TIMEOUT_SECONDS=30.
+    deadline = time.monotonic() + config.DIAG_TIMEOUT_SECONDS
+    timed_out = False
     with proc_cm as proc:
         stdout = cast(IO[str], proc.stdout)
         try:
             for line in stdout:
+                if time.monotonic() > deadline:
+                    timed_out = True
+                    break
                 chunk = line.rstrip("\n")
                 if bytes_yielded + len(chunk) > config.DIAG_MAX_OUTPUT_BYTES:
                     truncated = True
                     break
                 bytes_yielded += len(chunk)
                 yield f"data: {chunk}\n\n"
-            proc.wait(timeout=config.DIAG_TIMEOUT_SECONDS)
+            if timed_out:
+                proc.kill()
+                proc.wait()
+                yield f"event: error\ndata: timeout after {config.DIAG_TIMEOUT_SECONDS}s\n\n"
+                return
+            proc.wait(timeout=max(0.1, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()

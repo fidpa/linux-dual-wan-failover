@@ -166,17 +166,31 @@ trigger_instant_failover() {
             "REASON=signal_failed" \
             "LOCKFILE_ID=${emergency_id}"
 
-        # Default-Route entfernen und LTE-Route hinzufügen (Interface-spezifisch für Sicherheit)
-        if ip route del default dev "$PRIMARY_IFACE" 2>/dev/null || true; then
+        # Remove the primary default route (interface-specific for safety).
+        # The NM-managed backup route (metric 200) usually already exists and
+        # takes over as soon as the primary route is gone.
+        if ip route del default dev "$PRIMARY_IFACE" 2>/dev/null; then
             log_info "Removed default route for $PRIMARY_IFACE"
         fi
 
-        if ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric 100 2>/dev/null; then
+        # Only add the backup route if it is missing — and with metric 200
+        # (consistent with the metric-demotion strategy; the previous
+        # metric-100 add created a duplicate that route-guardian then had
+        # to clean up again).
+        local emergency_route_ok=0
+        if ip route show | grep -q "^default via .* dev $BACKUP_IFACE"; then
+            log_info "Backup route via $BACKUP_IFACE already present - no route add needed"
+            emergency_route_ok=1
+        elif ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric 200 2>/dev/null; then
+            emergency_route_ok=1
+        fi
+
+        if [[ $emergency_route_ok -eq 1 ]]; then
             # Event 8b: Emergency failover success
             log_info_structured "Emergency failover completed successfully" \
                 "TO_INTERFACE=${BACKUP_IFACE}" \
                 "GATEWAY=${BACKUP_GATEWAY}" \
-                "METRIC=100" \
+                "METRIC=200" \
                 "STATUS=success"
 
             # v3.6.0: Lockfile-Cleanup nach 30s Stabilisierung planen (wie routing.sh)

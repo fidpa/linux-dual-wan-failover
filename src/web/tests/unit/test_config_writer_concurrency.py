@@ -16,13 +16,16 @@ from web.writers import config_writer
 
 
 def _patch_paths(tmp_path: Path, monkeypatch):
+    # Override design: the writer reads/patches the OVERRIDE file; the base
+    # config is never written by the web app.
     from web import config as cfg
-    conf_src = tmp_path / "failover.conf"
+    conf_src = tmp_path / "failover-overrides.conf"
     conf_src.write_text(
         "FAILOVER_THRESHOLD_DOWN=60\nMIN_FAILBACK_SCORE=60\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(cfg, "CONFIG_PATH", conf_src)
+    monkeypatch.setattr(cfg, "CONFIG_PATH", tmp_path / "failover.conf")
+    monkeypatch.setattr(cfg, "OVERRIDE_CONFIG_PATH", conf_src)
     monkeypatch.setattr(cfg, "CONFIG_LOCK", tmp_path / "config.lock")
     monkeypatch.setattr(cfg, "STAGING_CONFIG_PATH", tmp_path / "staging.conf")
     monkeypatch.setattr(
@@ -87,13 +90,18 @@ def test_apply_updates_serialises_concurrent_writers(tmp_path, monkeypatch):
     assert pairs[1][0] >= pairs[0][1] - 0.001  # tiny slack for monotonic precision
 
 
-def test_apply_updates_returns_error_when_config_path_missing(tmp_path, monkeypatch):
+def test_apply_updates_bootstraps_missing_override_file(tmp_path, monkeypatch):
+    """Missing override file is NOT an error — the first edit bootstraps it
+    with a self-describing comment header."""
+    _patch_paths(tmp_path, monkeypatch)
     from web import config as cfg
-    monkeypatch.setattr(cfg, "CONFIG_PATH", tmp_path / "absent.conf")
-    monkeypatch.setattr(cfg, "CONFIG_LOCK", tmp_path / "config.lock")
+    cfg.OVERRIDE_CONFIG_PATH.unlink()  # simulate first-ever override
     out = config_writer.apply_updates({"FAILOVER_THRESHOLD_DOWN": 50})
-    assert out["status"] == "error"
-    assert "cannot read" in out["detail"]
+    assert out["status"] == "applied"
+    assert out["applied"] == ["FAILOVER_THRESHOLD_DOWN"]
+    staged = (tmp_path / "staging.conf").read_text()
+    assert "FAILOVER_THRESHOLD_DOWN=50" in staged
+    assert staged.startswith("# failover-overrides.conf")
 
 
 def test_apply_updates_noop_when_value_unchanged(tmp_path, monkeypatch):
@@ -105,15 +113,12 @@ def test_apply_updates_noop_when_value_unchanged(tmp_path, monkeypatch):
 
 def test_apply_updates_rejects_duplicate_keys(tmp_path, monkeypatch):
     """Duplicate KEY= lines must be refused rather than silently rewritten."""
+    _patch_paths(tmp_path, monkeypatch)
     from web import config as cfg
-    conf_src = tmp_path / "failover.conf"
-    conf_src.write_text(
+    cfg.OVERRIDE_CONFIG_PATH.write_text(
         "FAILOVER_THRESHOLD_DOWN=60\nFAILOVER_THRESHOLD_DOWN=70\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(cfg, "CONFIG_PATH", conf_src)
-    monkeypatch.setattr(cfg, "CONFIG_LOCK", tmp_path / "config.lock")
-    monkeypatch.setattr(cfg, "STAGING_CONFIG_PATH", tmp_path / "staging.conf")
 
     out = config_writer.apply_updates({"FAILOVER_THRESHOLD_DOWN": 99})
     assert out["status"] == "error"
@@ -124,7 +129,7 @@ def test_apply_updates_preserves_quotes_in_value(tmp_path, monkeypatch):
     """A quoted value (KEY="60") must stay quoted after patching."""
     _patch_paths(tmp_path, monkeypatch)
     from web import config as cfg
-    cfg.CONFIG_PATH.write_text(
+    cfg.OVERRIDE_CONFIG_PATH.write_text(
         'FAILOVER_THRESHOLD_DOWN="60"\nMIN_FAILBACK_SCORE=60\n',
         encoding="utf-8",
     )

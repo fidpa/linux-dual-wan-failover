@@ -92,11 +92,14 @@ ROUTE_GUARDIAN_CHECK_INTERVAL=10  # seconds between route enforcement passes
 
 # A score-based failover fires only when the primary stays below
 # FAILOVER_THRESHOLD_DOWN for FAILURE_THRESHOLD consecutive checks.
-# A failback fires only when the primary stays above FAILOVER_THRESHOLD_UP
-# for RECOVERY_THRESHOLD consecutive checks.
 FAILOVER_THRESHOLD_DOWN=60
-FAILOVER_THRESHOLD_UP=80
-HYSTERESIS_GAP=20
+
+# NOTE: FAILOVER_THRESHOLD_UP and HYSTERESIS_GAP are NOT evaluated by the
+# daemon. Failback is governed by MIN_FAILBACK_SCORE + MIN_BACKUP_TIME +
+# MIN_STABLE_DURATION (see the failback section below). The variables remain
+# here, commented out, as documentation of the original hysteresis design.
+# FAILOVER_THRESHOLD_UP=80   # UNUSED — failback via MIN_FAILBACK_SCORE
+# HYSTERESIS_GAP=20          # UNUSED — hysteresis path was dead code, removed
 
 FAILURE_THRESHOLD=5    # CHECK_INTERVAL × FAILURE_THRESHOLD = ~75 s tolerance
 RECOVERY_THRESHOLD=20  # CHECK_INTERVAL × RECOVERY_THRESHOLD = ~5 min stability
@@ -209,10 +212,13 @@ HARDWARE_TEMP_BACKEND=none
 # ============================================================================
 # Logging / state directories (override only if you know why)
 # ============================================================================
+# Default-guard form (${VAR:-default}): an environment override — e.g. a
+# test harness pointing STATE_DIR at a tmpdir — must not be clobbered by
+# sourcing this file.
 
-LOG_DIR=/var/log/linux-dual-wan-failover
-STATE_DIR=/var/lib/linux-dual-wan-failover
-RUNTIME_DIR=/run/linux-dual-wan-failover
+LOG_DIR="${LOG_DIR:-/var/log/linux-dual-wan-failover}"
+STATE_DIR="${STATE_DIR:-/var/lib/linux-dual-wan-failover}"
+RUNTIME_DIR="${RUNTIME_DIR:-/run/linux-dual-wan-failover}"
 
 # ============================================================================
 # Optional Web-UI (failover-web.service)

@@ -6,15 +6,25 @@ that doesn't happen.
 
 ## 1. Asymmetric thresholds
 
-Failover and failback use different score thresholds:
+Failover and failback use different score conditions:
 
 ```
 fail over   when primary_score < FAILOVER_THRESHOLD_DOWN  (default 60)
-fail back   when primary_score > FAILOVER_THRESHOLD_UP    (default 80)
+fail back   when primary_score >= MIN_FAILBACK_SCORE      (default 60)
+            AND the time-based stability gates have passed
+            (MIN_BACKUP_TIME + MIN_STABLE_DURATION, section 3)
 ```
 
-The 20-point gap (`HYSTERESIS_GAP`) prevents the orchestrator from
-oscillating when the primary is hovering at exactly the threshold.
+The asymmetry lives in the *time* domain, not in the score domain: a
+failback additionally requires RECOVERY_THRESHOLD consecutive good checks,
+a minimum dwell time on the backup, and a continuous stability window.
+
+> Historical note: earlier designs used a score-based hysteresis pair
+> (`FAILOVER_THRESHOLD_UP=80`, `HYSTERESIS_GAP=20`). The daemon no longer
+> evaluates those variables — the time-based gates proved strictly more
+> robust against score noise — and the dead hysteresis code path was
+> removed. The config example keeps both names as commented-out
+> documentation so operators migrating old configs aren't surprised.
 
 ## 2. Consecutive-check requirements
 
@@ -105,5 +115,3 @@ What not to touch unless you know why:
 
 - `STABILITY_RESET_THRESHOLD` — the 10-point gap below
   `FAILOVER_THRESHOLD_DOWN` exists for the bug above.
-- `HYSTERESIS_GAP` — already large enough at 20 points to suppress
-  most natural noise.

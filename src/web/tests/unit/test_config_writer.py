@@ -59,9 +59,10 @@ def test_apply_updates_noop_for_empty_input(tmp_path, monkeypatch):
 def test_apply_updates_full_pipeline_with_mocks(tmp_path, monkeypatch):
     from web import config as cfg
 
-    conf_src = tmp_path / "failover.conf"
+    conf_src = tmp_path / "failover-overrides.conf"
     conf_src.write_text("FAILOVER_THRESHOLD_DOWN=60\nMIN_FAILBACK_SCORE=60\n", encoding="utf-8")
-    monkeypatch.setattr(cfg, "CONFIG_PATH", conf_src)
+    monkeypatch.setattr(cfg, "CONFIG_PATH", tmp_path / "failover.conf")
+    monkeypatch.setattr(cfg, "OVERRIDE_CONFIG_PATH", conf_src)
     monkeypatch.setattr(cfg, "CONFIG_LOCK", tmp_path / "config.lock")
     monkeypatch.setattr(cfg, "STAGING_CONFIG_PATH", tmp_path / "staging.conf")
 
@@ -96,9 +97,10 @@ def test_apply_updates_full_pipeline_with_mocks(tmp_path, monkeypatch):
 
 def test_apply_updates_install_failure_returns_error(tmp_path, monkeypatch):
     from web import config as cfg
-    conf_src = tmp_path / "failover.conf"
+    conf_src = tmp_path / "failover-overrides.conf"
     conf_src.write_text("FAILOVER_THRESHOLD_DOWN=60\n", encoding="utf-8")
-    monkeypatch.setattr(cfg, "CONFIG_PATH", conf_src)
+    monkeypatch.setattr(cfg, "CONFIG_PATH", tmp_path / "failover.conf")
+    monkeypatch.setattr(cfg, "OVERRIDE_CONFIG_PATH", conf_src)
     monkeypatch.setattr(cfg, "CONFIG_LOCK", tmp_path / "config.lock")
     monkeypatch.setattr(cfg, "STAGING_CONFIG_PATH", tmp_path / "staging.conf")
 

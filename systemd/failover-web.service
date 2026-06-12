@@ -21,11 +21,14 @@ StateDirectoryMode=0750
 LogsDirectory=linux-dual-wan-failover
 LogsDirectoryMode=0755
 
+# No --access-logfile/--error-logfile: both pointed at the same file as the
+# app's own log handler (double writer from 2 workers, not rotation-safe).
+# gunicorn errors go to stderr → journald; HTTP access logging is the
+# reverse proxy's job; the app log is a WatchedFileHandler rotated by
+# logrotate (see systemd/failover-web.logrotate).
 ExecStart=/usr/local/lib/linux-dual-wan-failover/web/venv/bin/gunicorn \
     --workers 2 --worker-class gthread --threads 4 \
     --bind 127.0.0.1:8091 \
-    --access-logfile /var/log/linux-dual-wan-failover/failover-web.log \
-    --error-logfile /var/log/linux-dual-wan-failover/failover-web.log \
     --timeout 35 \
     --pythonpath /usr/local/lib/linux-dual-wan-failover/web/src \
     web.wsgi:app
@@ -36,6 +39,10 @@ RestartSec=10
 # --- Environment ---------------------------------------------------------
 Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONDONTWRITEBYTECODE=1"
+# gunicorn 25.x places its control socket under $HOME — the service user's
+# home is read-only under ProtectHome, producing a "Control server error"
+# on every start. StateDirectory is the writable service home.
+Environment="HOME=/var/lib/failover-web"
 Environment="FAILOVER_WEB_PROJECT_NAME=linux-dual-wan-failover"
 Environment="FAILOVER_WEB_TARGET_SERVICE=failover-monitor.service"
 Environment="FAILOVER_WEB_PORT=8091"
@@ -43,8 +50,15 @@ Environment="FAILOVER_WEB_PORT=8091"
 Environment="FAILOVER_WEB_RUNTIME_DIR=/run/linux-dual-wan-failover"
 Environment="FAILOVER_WEB_STATE_DIR=/run/linux-dual-wan-failover/wan-state"
 Environment="FAILOVER_WEB_EVENTS_DB=/var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db"
+# Base config (static, read-only for the UI) + operator override file
+# (the only file the UI writes, via the root-validating install helper).
 Environment="FAILOVER_WEB_CONFIG_PATH=/etc/linux-dual-wan-failover/failover.conf"
+Environment="FAILOVER_WEB_OVERRIDE_CONFIG_PATH=/etc/linux-dual-wan-failover/failover-overrides.conf"
 Environment="FAILOVER_WEB_LOG_DIR=/var/log/linux-dual-wan-failover"
+# Freshness thresholds matched to the metrics-collector cadence (~60s prom
+# writes) — the 30s default flagged "stale" in steady state.
+Environment="FAILOVER_WEB_STATE_STALE_SECONDS=75"
+Environment="FAILOVER_WEB_STATE_MISSING_SECONDS=180"
 # Set FAILOVER_WEB_CSRF_HOSTS to your reverse-proxy hostname before going
 # live. The default ("localhost,127.0.0.1") is dev-only.
 # Environment="FAILOVER_WEB_CSRF_HOSTS=failover.local,localhost"
@@ -54,21 +68,29 @@ Environment="ALERTING_BACKEND=none"
 Environment="ALERTING_PLUGIN_DIR=/usr/local/lib/linux-dual-wan-failover/plugins/alerting"
 
 # --- Security hardening --------------------------------------------------
+#
+# Deliberately NO seccomp-implying options here (SystemCallArchitectures,
+# MemoryDenyWriteExecute, RestrictSUIDSGID, RestrictRealtime,
+# RestrictNamespaces, LockPersonality, ProtectKernelTunables/Modules):
+# for non-root services those IMPLY NoNewPrivileges=yes and silently
+# override the explicit NoNewPrivileges=false below — every sudo call
+# (install-failover-conf, systemctl restart) then fails with "no new
+# privileges", which kills the config editor and the restart button.
+# The mount-based sandbox below stays; privilege escalation remains scoped
+# to exactly two commands via sudoers (systemd/failover-web.sudoers).
+#
+# /etc/<project> must be writable INSIDE this unit's mount namespace:
+# sudo children inherit it, so ProtectSystem=strict would make /etc
+# read-only for the root install helper too (mktemp/mv would fail).
+# Protection of the override file relies on unix perms + the sudoers scope;
+# the base config stays read-only via ReadOnlyPaths.
 NoNewPrivileges=false
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/usr/local/lib/linux-dual-wan-failover /etc/linux-dual-wan-failover/failover.conf
-ReadWritePaths=/var/lib/failover-web /var/log/linux-dual-wan-failover /run/linux-dual-wan-failover
-ProtectKernelTunables=true
-ProtectKernelModules=true
+ReadWritePaths=/var/lib/failover-web /var/log/linux-dual-wan-failover /run/linux-dual-wan-failover /etc/linux-dual-wan-failover
 ProtectControlGroups=true
-RestrictNamespaces=true
-RestrictRealtime=true
-RestrictSUIDSGID=true
-LockPersonality=true
-MemoryDenyWriteExecute=true
-SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

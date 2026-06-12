@@ -91,7 +91,7 @@ Three entities, three privilege levels:
 |-----------|-----|--------|
 | `failover-monitor.service` | root | Owns `/run/<project>/wan-state/`. Reads `failover.conf` and `source`s it as Bash. Manipulates `ip route`. |
 | `failover-web.service` | failover-web (in group `wan-state`) | Writes `manual_action.json` into the daemon's runtime dir. Reads the read-only state files + SQLite events. |
-| `install-failover-conf` | root (invoked via `sudo -n`) | Re-validates the staged config in root context, atomically renames it into `/etc/<project>/failover.conf`. |
+| `install-failover-conf` | root (invoked via `sudo -n`) | Re-validates the staged config in root context, atomically renames it into `/etc/<project>/failover-overrides.conf` (the base `failover.conf` is never written by the UI; the daemon sources the override file after the base, last-wins). |
 
 The web app's sudoers fragment grants exactly two NOPASSWD rules:
 

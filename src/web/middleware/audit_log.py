@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 import time
-from logging.handlers import RotatingFileHandler
+from logging.handlers import WatchedFileHandler
 from typing import Any
 
 from flask import request
@@ -26,11 +26,9 @@ def _logger_singleton() -> logging.Logger:
     lg.setLevel(logging.INFO)
     lg.propagate = False
     try:
-        handler: logging.Handler = RotatingFileHandler(
-            config.AUDIT_LOG,
-            maxBytes=config.LOG_MAX_BYTES,
-            backupCount=config.AUDIT_LOG_BACKUP_COUNT,
-        )
+        # WatchedFileHandler + logrotate (multiprocess-safe rotation, see
+        # app._configure_logging). Retention: systemd/failover-web.logrotate.
+        handler: logging.Handler = WatchedFileHandler(config.AUDIT_LOG)
     except (PermissionError, FileNotFoundError) as exc:
         # Audit-tampering threat: a silent fallback to stderr would let the
         # dashboard run without forensic evidence. Refuse loud rather than

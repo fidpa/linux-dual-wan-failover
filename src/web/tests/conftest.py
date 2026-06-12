@@ -11,6 +11,7 @@ import json
 import sqlite3
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,8 @@ def fixtures_dir(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(cfg, "MANUAL_ACTION_LOCK", tmp_path / "manual_action.lock")
     monkeypatch.setattr(cfg, "CONFIG_LOCK", tmp_path / "config.lock")
     monkeypatch.setattr(cfg, "STAGING_CONFIG_PATH", tmp_path / "staging_failover.conf")
+    monkeypatch.setattr(cfg, "CONFIG_PATH", tmp_path / "failover.conf")
+    monkeypatch.setattr(cfg, "OVERRIDE_CONFIG_PATH", tmp_path / "failover-overrides.conf")
     monkeypatch.setattr(cfg, "APP_LOG", log_path)
     monkeypatch.setattr(cfg, "AUDIT_LOG", audit_path)
 
@@ -94,6 +97,12 @@ def stale_state(fresh_state: Path) -> Path:
     return fresh_state
 
 
+def _ts_days_ago(days: int, clock: str) -> str:
+    """SQLite DATETIME string for (today - days) at a fixed wall-clock time."""
+    day = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    return f"{day} {clock}"
+
+
 @pytest.fixture()
 def events_db(fixtures_dir: Path) -> Path:
     """Seed a tiny failover_events table for history tests."""
@@ -125,9 +134,12 @@ def events_db(fixtures_dir: Path) -> Path:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            ("2026-04-29 10:15:00", "failover", "eth0", "lte0", 25, 80, "score_based", 7, 4500, 0),
-            ("2026-04-29 12:30:00", "failback", "lte0", "eth0", 95, 70, "score_based", 5, 3200, 8100),
-            ("2026-05-01 22:21:00", "failover", "eth0", "lte0", 5, 90, "primary_no_carrier", 6, 5200, 200_000),
+            # Timestamps are relative to "now" so the seeded events always
+            # fall inside the default days=30 query window (hardcoded dates
+            # made the history test a time bomb).
+            (_ts_days_ago(13, "10:15:00"), "failover", "eth0", "lte0", 25, 80, "score_based", 7, 4500, 0),
+            (_ts_days_ago(13, "12:30:00"), "failback", "lte0", "eth0", 95, 70, "score_based", 5, 3200, 8100),
+            (_ts_days_ago(2, "22:21:00"), "failover", "eth0", "lte0", 5, 90, "primary_no_carrier", 6, 5200, 200_000),
         ],
     )
     conn.commit()

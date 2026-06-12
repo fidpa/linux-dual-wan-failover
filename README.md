@@ -257,7 +257,7 @@ as a starting point), point your browser at it, and you have:
 
 - live state, latency, loss, jitter, DNS/HTTP scores per interface;
 - 30-day failover event history (read-only from the metrics SQLite DB);
-- whitelisted config tuning (16 keys, range-validated, root-owned installer
+- whitelisted config tuning (15 keys, range-validated, root-owned installer
   re-validates before write);
 - 1 / 60 s rate-limit per source-IP, CSRF + Origin/Referer check, JSON-Lines
   audit log, alerting on every mutation through the same plugin contract

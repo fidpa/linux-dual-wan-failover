@@ -173,6 +173,15 @@ install_web_systemd() {
         "${TMPFILES_DIR}/failover-web.conf"
     systemd-tmpfiles --create "${TMPFILES_DIR}/failover-web.conf" 2>/dev/null || true
 
+    # Log rotation: the app uses WatchedFileHandler (no in-process rotation —
+    # not multiprocess-safe with 2 gunicorn workers); logrotate owns the policy.
+    if [[ -d /etc/logrotate.d ]]; then
+        install -m 644 "${REPO_ROOT}/systemd/failover-web.logrotate" \
+            /etc/logrotate.d/failover-web
+    else
+        echo "WARNING: /etc/logrotate.d not found — install systemd/failover-web.logrotate manually or the web-ui logs will grow unbounded." >&2
+    fi
+
     systemctl daemon-reload
 }
 

@@ -108,11 +108,14 @@ Returns recent failover events from the SQLite event store.
 
 ### `GET /api/config`
 
-Returns the whitelisted tunables with their current production values.
+Returns the whitelisted tunables with their current EFFECTIVE values
+(base config overlaid with the operator override file — mirroring the
+daemon's source order).
 
 ```json
 {
   "config_path": "/etc/linux-dual-wan-failover/failover.conf",
+  "override_config_path": "/etc/linux-dual-wan-failover/failover-overrides.conf",
   "fields": {
     "FAILOVER_THRESHOLD_DOWN": {
       "type": "int", "min": 0, "max": 100, "current": 60,
@@ -193,11 +196,19 @@ Response statuses:
 | 422 | `validation_failed` | Range / type / unknown-key errors; nothing applied. |
 | 500 | `error` | Read/patch/install failure; nothing applied. |
 
-The 16-key whitelist is defined in
+The 15-key whitelist is defined in
 [`src/web/readers/config_reader.py`](../../src/web/readers/config_reader.py)
 and re-enforced by
 [`src/web/install-failover-conf.sh`](../../src/web/install-failover-conf.sh)
 in root context.
+
+Writes land exclusively in `failover-overrides.conf` — the base
+`failover.conf` is never touched by the API. The daemon sources the
+override file after the base config (bash last-wins), so a `PUT` takes
+effect on the restart that follows it. Resetting a value to the base
+default leaves an explicit override line behind (harmless; remove it from
+the override file manually if you want the base value to track future
+base-config changes).
 
 ### `POST /api/diag/{tool}`
 

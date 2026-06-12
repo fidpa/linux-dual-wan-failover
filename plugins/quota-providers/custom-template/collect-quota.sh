@@ -22,7 +22,7 @@ QUOTA_PROVIDER_NAME="${QUOTA_PROVIDER_NAME:-custom}"
 #
 # Examples:
 #   curl -s http://my-modem.local/api/quota | jq -r '.usage_percent'
-#   curl -s -u admin:secret https://isp.example/api | jq -r '.data_used_pct'
+#   curl -s -u admin:secret https://isp.example/api | jq -r '.data_used_pct'  # gitleaks:allow (placeholder creds)
 #   awk '/limit/ {print $2}' /tmp/my-collector-output
 # ----------------------------------------------------------------------------
 get_limit_pct() {

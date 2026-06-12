@@ -16,7 +16,7 @@ high-level index.
 | Gateways | `PRIMARY_GATEWAY`, `BACKUP_GATEWAY` | no (auto-detected) |
 | Health checks | `CHECK_IPS`, `DNS_SERVERS`, `DNS_TEST_DOMAINS` | no (sane defaults) |
 | Timing | `CHECK_INTERVAL`, `ROUTE_GUARDIAN_CHECK_INTERVAL` | no (sane defaults) |
-| Hysteresis | `FAILOVER_THRESHOLD_DOWN`, `FAILOVER_THRESHOLD_UP`, `HYSTERESIS_GAP`, `FAILURE_THRESHOLD`, `RECOVERY_THRESHOLD`, `EMERGENCY_THRESHOLD` | no (sane defaults) |
+| Hysteresis | `FAILOVER_THRESHOLD_DOWN`, `FAILURE_THRESHOLD`, `RECOVERY_THRESHOLD`, `EMERGENCY_THRESHOLD` | no (sane defaults) |
 | Cooldowns | `ANTI_FLAPPING_DELAY`, `EMERGENCY_FAILBACK_COOLDOWN` | no (sane defaults) |
 | Failback gating | `MIN_FAILBACK_SCORE`, `MIN_BACKUP_TIME`, `MIN_STABLE_DURATION`, `STABILITY_RESET_THRESHOLD` | no (sane defaults) |
 | Last-resort | `LAST_RESORT_ENABLED`, `LAST_RESORT_PRIMARY_THRESHOLD`, `LAST_RESORT_COOLDOWN` | no (disabled by default) |

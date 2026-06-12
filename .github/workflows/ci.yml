@@ -6,6 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege: every job only reads the repo. (gitleaks-action reads PR
+# metadata through the same token; nothing here ever writes.)
+permissions:
+  contents: read
+
+# Superseded runs on the same ref are wasted minutes — cancel them.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   shellcheck:
     name: ShellCheck
@@ -18,14 +28,21 @@ jobs:
           sudo apt-get install -y shellcheck
           # Fail on warnings; suppress SC1091 (sourced files outside repo path
           # in CI — the toolkit-aware loader handles this at runtime).
+          # Covers everything bash-executable in the repo: libs, services, the
+          # root-side config installer, the installer itself, plugins, and the
+          # bats helpers/mocks (extension-less but plain bash).
           shellcheck \
             --severity=warning \
             --exclude=SC1091 \
             --shell=bash \
             src/lib/*.sh \
             src/services/*.sh \
+            src/web/install-failover-conf.sh \
             plugins/alerting/*.sh \
-            plugins/quota-providers/custom-template/*.sh
+            plugins/quota-providers/custom-template/*.sh \
+            install.sh \
+            tests/helpers.bash \
+            tests/mocks/ip tests/mocks/nmcli tests/mocks/ping
 
   bashate:
     name: bashate
@@ -38,6 +55,10 @@ jobs:
       - name: Run bashate
         run: |
           pip install bashate
+          # Narrower path list than shellcheck on purpose: install.sh and the
+          # web installer predate the bashate style rules and reformatting
+          # them wholesale buys nothing — shellcheck still covers them for
+          # actual defects.
           bashate --ignore E006,E040 \
             src/lib/*.sh \
             src/services/*.sh \
@@ -55,6 +76,28 @@ jobs:
       - name: Run unit tests
         run: bats --print-output-on-failure tests/unit/
 
+  pytest:
+    name: pytest (web UI, py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the documented floor (install.sh --with-web-ui), 3.12 the
+        # current mainstream. Keeping the floor in CI is what makes the
+        # "requires Python 3.10+" claim trustworthy.
+        python-version: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: src/web/requirements.txt
+      - name: Install web-UI dependencies
+        run: pip install -r src/web/requirements.txt
+      - name: Run web-UI test suite
+        run: python -m pytest src/web/tests/ -q
+
   ruff:
     name: ruff (Python)
     runs-on: ubuntu-latest
@@ -68,25 +111,67 @@ jobs:
       - name: Lint Python sources
         run: |
           ruff check \
+            src/web/ \
             src/services/failover-metrics-collector.py \
             plugins/quota-providers/netgear-lm1200/collect-quota.py
       - name: Format check
         run: |
+          # Format-check stays scoped to the two standalone scripts: src/web/
+          # predates ruff-format and a 31-file reformat would bury the diff
+          # history for zero behavioral gain. New web files should be written
+          # format-clean; widen this scope when the tree is migrated.
           ruff format --check \
             src/services/failover-metrics-collector.py \
             plugins/quota-providers/netgear-lm1200/collect-quota.py
 
-  systemd-syntax:
-    name: systemd unit syntax
+  config-and-unit-syntax:
+    name: systemd / sudoers / logrotate / config syntax
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Verify unit files parse
+      - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y systemd
-          for f in systemd/*.service systemd/*.timer; do
-            sudo systemd-analyze verify --recursive-errors=yes "$f" || true
+          sudo apt-get install -y systemd logrotate
+      - name: Verify systemd units parse (hard fail)
+        run: |
+          # systemd-analyze verify exits non-zero when ExecStart binaries are
+          # missing — which they always are on a runner. Stub every Exec*
+          # path referenced by the units so the check is SHARP for everything
+          # else (typos in directives, bad values, unknown keys). The earlier
+          # `|| true` variant could never fail and was a fake check.
+          grep -hoE '^Exec[A-Za-z]+=[-+!:@]*\S+' systemd/*.service \
+            | sed -E 's/^Exec[A-Za-z]+=[-+!:@]*//' | sort -u \
+            | while read -r bin; do
+                [[ -e "$bin" ]] || sudo install -D -m 755 /dev/null "$bin"
+              done
+          # The units reference these as User=/Group=/SupplementaryGroups=.
+          sudo groupadd --system wan-state 2>/dev/null || true
+          sudo useradd --system -g wan-state -s /usr/sbin/nologin failover-web 2>/dev/null || true
+          # cd into systemd/ so verify resolves sibling units (After=,
+          # Wants=) from the repo instead of complaining they're missing.
+          cd systemd
+          rc=0
+          for f in *.service *.timer; do
+            if ! sudo systemd-analyze verify --recursive-errors=no "$f"; then
+              echo "::error file=systemd/$f::systemd-analyze verify failed"
+              rc=1
+            fi
+          done
+          exit "$rc"
+      - name: Validate sudoers fragment (visudo)
+        run: sudo visudo -cf systemd/failover-web.sudoers
+      - name: Validate logrotate policy
+        run: |
+          # -d parses the config without touching anything; a private state
+          # file keeps it independent of the runner's /var/lib/logrotate.
+          logrotate -d -s "$(mktemp)" systemd/failover-web.logrotate
+      - name: Syntax-check sourced config examples
+        run: |
+          # failover.conf(.example) is `source`d by the daemon as bash —
+          # a syntax error here bricks the service at startup.
+          for f in config/failover.conf.example config/examples/*.conf; do
+            bash -n "$f"
           done
 
   schema:
@@ -96,3 +181,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate snapshot schema is valid JSON
         run: python3 -c "import json; json.load(open('plugins/quota-providers/_schema/quota-snapshot.schema.json'))"
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a secret that was committed and later removed is
+          # still leaked. .gitleaksignore carries the audited false positives
+          # (placeholder creds in the quota custom-template docs).
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

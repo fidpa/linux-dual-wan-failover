@@ -197,7 +197,8 @@ export ALERTS_PREFIX="${ALERTS_PREFIX:-Route Guardian}"
 # 7. ROUTE MONITORING — Default-Routes, Subnets, Health Check Orchestration (→ Zeile 1222)
 #    check_local_subnet_routes()         LAN/MGMT Subnet-Routen prüfen
 #    monitor_default_routes()            DSL/LTE Default-Route Loop mit Stale-Lockfile-Detection
-#    comprehensive_route_health_check()  Orchestriert: Duplikate, Routes, Subnets, NM, Konflikte
+#    _failover_lock_active()             Failover-Lockfile-Check mit Stale-Detection
+#    comprehensive_route_health_check()  Lockfile-Gate, dann: Duplikate, Routes, Subnets, NM, Konflikte
 #
 # 8. STATUS REPORTING — CLI-Ausgabe und Dashboard-JSON (→ Zeile 1386)
 #    show_status()                       Human-readable Status mit Interface/Route/Counter-Info
@@ -1212,41 +1213,49 @@ check_local_subnet_routes() {
     return 0
 }
 
-# Main monitoring function for default routes (v1.6 compatible)
-monitor_default_routes() {
-    # v3.2.0: Enhanced lockfile check with stale detection
-    # Pause during failover orchestration (Failover-Monitor has priority)
-    if [[ -f /run/failover-in-progress.lock ]]; then
-        # Parse lockfile format: PID_TIMESTAMP (from routing.sh v3.4)
-        local lockfile_content
-        lockfile_content=$(cat /run/failover-in-progress.lock 2>/dev/null)
+# Failover-orchestration pause check, extracted from monitor_default_routes()
+# so comprehensive_route_health_check() can gate the ENTIRE cycle —
+# duplicate-cleanup, NM-metric-repair and conflict-resolution also mutate
+# routes and must not race routing.sh's metric swap.
+# Returns 0 = lock active (pause this cycle), 1 = no valid lock (proceed).
+_failover_lock_active() {
+    [[ -f /run/failover-in-progress.lock ]] || return 1
 
-        if [[ -n "$lockfile_content" && "$lockfile_content" =~ ^[0-9]+_[0-9]+$ ]]; then
-            # Extract timestamp (format: PID_TIMESTAMP)
-            local lock_timestamp
-            lock_timestamp=$(cut -d_ -f2 <<< "$lockfile_content")
-            local lock_age
-            lock_age=$(( $(date +%s) - lock_timestamp ))
+    # Parse lockfile format: PID_TIMESTAMP (routing.sh safe_route_change /
+    # nmcli-failover-monitor emergency path)
+    local lockfile_content
+    lockfile_content=$(cat /run/failover-in-progress.lock 2>/dev/null)
 
-            if [[ $lock_age -gt 60 ]]; then
-                # Stale lockfile detected (>60s old) - likely from crashed cleanup job
-                log_message "WARNING" "FAILOVER" "Stale lockfile detected (${lock_age}s old, content: $lockfile_content) - removing and resuming"
-                send_alert "STALE_LOCKFILE" "⚠️ Stale failover lockfile removed" "Age: ${lock_age}s, Lockfile: $lockfile_content" &
-                rm -f /run/failover-in-progress.lock 2>/dev/null || true
-                # Continue with normal route checks after cleanup
-            else
-                # Valid lockfile - pause route checks
-                log_message "INFO" "FAILOVER" "Failover in progress - skipping route checks (lockfile age: ${lock_age}s)"
-                return 0
-            fi
-        else
-            # Malformed lockfile (legacy format or corrupted) - log and continue
-            log_message "WARNING" "FAILOVER" "Malformed lockfile detected (content: $lockfile_content) - removing"
+    if [[ -n "$lockfile_content" && "$lockfile_content" =~ ^[0-9]+_[0-9]+$ ]]; then
+        # Extract timestamp (format: PID_TIMESTAMP)
+        local lock_timestamp
+        lock_timestamp=$(cut -d_ -f2 <<< "$lockfile_content")
+        local lock_age
+        lock_age=$(( $(date +%s) - lock_timestamp ))
+
+        if [[ $lock_age -gt 60 ]]; then
+            # Stale lockfile detected (>60s old) - likely from crashed cleanup job
+            log_message "WARNING" "FAILOVER" "Stale lockfile detected (${lock_age}s old, content: $lockfile_content) - removing and resuming"
+            send_alert "STALE_LOCKFILE" "⚠️ Stale failover lockfile removed" "Age: ${lock_age}s, Lockfile: $lockfile_content" &
             rm -f /run/failover-in-progress.lock 2>/dev/null || true
-            # Continue with normal route checks after cleanup
+            return 1  # Continue with normal route checks after cleanup
         fi
+
+        # Valid lockfile - pause route checks
+        log_message "INFO" "FAILOVER" "Failover in progress - skipping route checks (lockfile age: ${lock_age}s)"
+        return 0
     fi
 
+    # Malformed lockfile (legacy format or corrupted) - log and continue
+    log_message "WARNING" "FAILOVER" "Malformed lockfile detected (content: $lockfile_content) - removing"
+    rm -f /run/failover-in-progress.lock 2>/dev/null || true
+    return 1
+}
+
+# Main monitoring function for default routes (v1.6 compatible)
+# Lockfile check lives in _failover_lock_active(), called cycle-wide from
+# comprehensive_route_health_check().
+monitor_default_routes() {
     local dsl_ok=false
     local lte_ok=false
 
@@ -1373,6 +1382,15 @@ monitor_default_routes() {
 
 # v2.0 NEW: Comprehensive route health check
 comprehensive_route_health_check() {
+    # Gate the WHOLE cycle on the failover lockfile — every step below
+    # mutates routes or NM metrics and must not race the orchestrator.
+    # (Previously only monitor_default_routes() honored the lockfile;
+    # duplicate-cleanup, NM-metric-repair and conflict-resolution kept
+    # running during an in-flight failover.)
+    if _failover_lock_active; then
+        return 0
+    fi
+
     log_message "INFO" "HEALTH" "Starting comprehensive route health check"
 
     # 1. Check default routes (v1.6 compatibility)
@@ -1564,8 +1582,14 @@ EOF
 # Signal handlers (Best Practice 2025: No exit in cleanup)
 # Note: logging.sh already sets trap 'log_performance' EXIT
 # We only need SIGTERM/SIGINT handlers
+# Trap-return alone did NOT stop the daemon: after the trap, bash resumed
+# the while-loop (wait returns, loop continues) and systemctl stop ran into
+# TimeoutStopSec (90s) + SIGKILL. The shutdown flag ends the loop at the
+# top of the next iteration instead.
+_rg_shutdown=0
 cleanup() {
     log_message "INFO" "SYSTEM" "Route Guardian shutting down (PID: $$)"
+    _rg_shutdown=1
     # NO exit here - let signal handler return naturally
     # The EXIT trap from logging.sh will run log_performance automatically
     return 0
@@ -1620,7 +1644,9 @@ case "${1:-monitor}" in
         enhanced_preflight_checks
 
         _rg_iteration=0
-        while true; do
+        # Flag-driven instead of `while true` — SIGTERM/SIGINT set
+        # _rg_shutdown in the trap, the loop ends at the iteration top.
+        while [[ $_rg_shutdown -eq 0 ]]; do
             (( _rg_iteration++ )) || true
 
             # v3.3.0: Check if LTE recovered (only if currently unavailable)
@@ -1643,5 +1669,8 @@ case "${1:-monitor}" in
             # v3.5.0: Reap zombie processes from backgrounded alert calls
             wait 2>/dev/null || true
         done
+        # Reached only via the _rg_shutdown flag (SIGTERM/SIGINT trap)
+        log_message "INFO" "SYSTEM" "Route Guardian monitor loop ended (clean shutdown)"
+        exit 0
         ;;
 esac

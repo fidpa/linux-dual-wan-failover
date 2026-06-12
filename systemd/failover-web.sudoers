@@ -9,9 +9,10 @@
 #   - Can restart failover-monitor.service (3-5 s service unavailable; the
 #     kernel routing table is preserved across the restart, so traffic is
 #     never dropped).
-#   - Can replace /etc/linux-dual-wan-failover/failover.conf via the
-#     root-owned validating helper (every line is re-parsed in root context
-#     before the file lands in /etc).
+#   - Can write /etc/linux-dual-wan-failover/failover-overrides.conf via
+#     the root-owned validating helper (every line is re-parsed in root
+#     context before the file lands in /etc). The base failover.conf is
+#     never written by the Web-UI.
 #
 # IMPORTANT
 # ---------

@@ -16,9 +16,11 @@ from .. import config
 # (key, type, min, max, help)
 ConfigField = tuple[str, type, int, int, str]
 
+# FAILOVER_THRESHOLD_UP removed: the daemon never evaluates that variable
+# (failback is governed by MIN_FAILBACK_SCORE + MIN_BACKUP_TIME +
+# MIN_STABLE_DURATION). A UI field with no code effect fakes control.
 CONFIG_SCHEMA: tuple[ConfigField, ...] = (
     ("FAILOVER_THRESHOLD_DOWN", int, 0, 100, "Failover when primary score falls below this value"),
-    ("FAILOVER_THRESHOLD_UP", int, 0, 100, "Failback when primary score rises above this value"),
     ("FAILURE_THRESHOLD", int, 1, 60, "Consecutive failures required to trigger a failover"),
     ("RECOVERY_THRESHOLD", int, 1, 120, "Consecutive successes required to trigger a failback"),
     ("EMERGENCY_THRESHOLD", int, 0, 100, "Score below which emergency failover bypasses consecutive checks"),
@@ -85,8 +87,13 @@ def parse_conf(text: str) -> dict[str, str]:
 
 
 def read_whitelisted_config() -> list[FieldDescriptor]:
-    """Return the whitelisted fields with their current production values."""
+    """Return the whitelisted fields with their current EFFECTIVE values.
+
+    Effective = base config overlaid with the operator override file —
+    mirrors the daemon's source order (base, then override, bash last-wins).
+    """
     raw = parse_conf(_read_file(config.CONFIG_PATH))
+    raw.update(parse_conf(_read_file(config.OVERRIDE_CONFIG_PATH)))
     descriptors: list[FieldDescriptor] = []
     for name, _type, lo, hi, help_text in CONFIG_SCHEMA:
         cur_raw = raw.get(name)

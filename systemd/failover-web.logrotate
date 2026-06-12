@@ -1,0 +1,23 @@
+# logrotate policy for the linux-dual-wan-failover Web-UI logs.
+#
+# Install: cp systemd/failover-web.logrotate /etc/logrotate.d/failover-web
+# (install.sh --with-web-ui does this for you.)
+#
+# Why logrotate instead of Python's RotatingFileHandler: the app runs under
+# gunicorn with 2 workers sharing one log file. In-process rotation is not
+# multiprocess-safe — doRollover() permanently fails once the size cap is
+# hit and the log goes dead. The app uses WatchedFileHandler, which detects
+# the rename via stat() and re-opens the file, so `copytruncate` is not
+# required (plain move-based rotation is fine and cheaper).
+
+/var/log/linux-dual-wan-failover/failover-web.log
+/var/log/linux-dual-wan-failover/failover-web-audit.log {
+    daily
+    rotate 14
+    size 10M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 failover-web failover-web
+}

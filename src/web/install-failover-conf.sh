@@ -54,7 +54,7 @@
 # Override points (env, set in the systemd unit or the install script)::
 #
 #   STAGING_PATH   — defaults to /var/lib/failover-web/staging/failover.conf
-#   TARGET_PATH    — defaults to /etc/linux-dual-wan-failover/failover.conf
+#   TARGET_PATH    — defaults to /etc/linux-dual-wan-failover/failover-overrides.conf
 #   TARGET_OWNER   — defaults to root
 #   TARGET_GROUP   — defaults to root
 #   TARGET_MODE    — defaults to 0644
@@ -66,7 +66,12 @@ set -euo pipefail
 # ----------------------------------------------------------------------------
 
 readonly STAGING_PATH="${STAGING_PATH:-/var/lib/failover-web/staging/failover.conf}"
-readonly TARGET_PATH="${TARGET_PATH:-/etc/linux-dual-wan-failover/failover.conf}"
+# Target is the OVERRIDE file, not the base config: this helper requires
+# EVERY line of the staged file to be a whitelisted integer tunable — the
+# full base config (interfaces, test targets, ...) could never pass that
+# validation. The base config stays static; the daemon sources the override
+# file after it (bash last-wins).
+readonly TARGET_PATH="${TARGET_PATH:-/etc/linux-dual-wan-failover/failover-overrides.conf}"
 readonly TARGET_OWNER="${TARGET_OWNER:-root}"
 readonly TARGET_GROUP="${TARGET_GROUP:-root}"
 readonly TARGET_MODE="${TARGET_MODE:-0644}"
@@ -75,7 +80,6 @@ readonly TARGET_MODE="${TARGET_MODE:-0644}"
 # When you add a tunable to the web UI, add it here as well.
 readonly -a CONFIG_SCHEMA=(
     "FAILOVER_THRESHOLD_DOWN"
-    "FAILOVER_THRESHOLD_UP"
     "FAILURE_THRESHOLD"
     "RECOVERY_THRESHOLD"
     "EMERGENCY_THRESHOLD"

@@ -31,7 +31,7 @@ import json
 import logging
 import time
 from collections.abc import Iterator
-from logging.handlers import RotatingFileHandler
+from logging.handlers import WatchedFileHandler
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from flask.typing import ResponseReturnValue
@@ -45,15 +45,16 @@ from .middleware.csrf import csrf_protect, init_csrf
 from .middleware.rate_limit import rate_limit
 from .middleware.sse_limit import reserve_slot as reserve_sse_slot
 from .readers import config_reader, events_reader, state_reader
-from .writers import config_writer, manual_action_writer, service_controller
+from .writers import config_writer, manual_action_writer
 
 
 def _configure_logging(app: Flask) -> None:
-    handler = RotatingFileHandler(
-        config.APP_LOG,
-        maxBytes=config.LOG_MAX_BYTES,
-        backupCount=config.LOG_BACKUP_COUNT,
-    )
+    # WatchedFileHandler instead of RotatingFileHandler: in-process rotation
+    # from 2 gunicorn workers onto the same file is not multiprocess-safe —
+    # doRollover() permanently fails once the size cap is hit and the log
+    # goes dead. Rotation is logrotate's job (systemd/failover-web.logrotate);
+    # WatchedFileHandler follows the rename via a stat() check and re-opens.
+    handler = WatchedFileHandler(config.APP_LOG)
     handler.setFormatter(
         logging.Formatter("[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s")
     )
@@ -226,6 +227,7 @@ def create_app() -> Flask:
             {
                 "fields": config_reader.descriptors_to_dict(descs),
                 "config_path": str(config.CONFIG_PATH),
+                "override_config_path": str(config.OVERRIDE_CONFIG_PATH),
             }
         )
 

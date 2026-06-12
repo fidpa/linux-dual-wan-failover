@@ -89,6 +89,16 @@ if [[ -f "/etc/linux-dual-wan-failover/failover.conf" ]]; then
     }
 fi
 
+# Operator overrides written by the web UI. The base config stays static;
+# UI edits land exclusively in this override file (integer tunables only,
+# root-validated by install-failover-conf). Sourced AFTER the base config
+# so overrides win (bash last-wins).
+if [[ -f "/etc/linux-dual-wan-failover/failover-overrides.conf" ]]; then
+    source "/etc/linux-dual-wan-failover/failover-overrides.conf" 2>/dev/null || {
+        log_warning "Failed to load failover-overrides.conf, using base config values"
+    }
+fi
+
 # Initialize state paths
 init_state_paths
 
@@ -97,10 +107,16 @@ PRIMARY_IFACE="${PRIMARY_IFACE:-eth0}"
 BACKUP_IFACE="${BACKUP_IFACE:-lte0}"
 
 # Network test targets (required by performance.sh)
+# Default guard instead of unconditional assignment — values from
+# failover.conf were previously overwritten right after the config load.
 # shellcheck disable=SC2034 # consumed by sourced lib/performance.sh
-CHECK_IPS=("8.8.8.8" "1.1.1.1" "9.9.9.9" "208.67.222.222")
+if [[ -z "${CHECK_IPS[*]:-}" ]]; then
+    CHECK_IPS=("8.8.8.8" "1.1.1.1" "9.9.9.9" "208.67.222.222")
+fi
 # shellcheck disable=SC2034 # consumed by sourced lib/performance.sh
-DNS_SERVERS=("8.8.8.8" "1.1.1.1")
+if [[ -z "${DNS_SERVERS[*]:-}" ]]; then
+    DNS_SERVERS=("8.8.8.8" "1.1.1.1")
+fi
 
 # Monitoring intervals
 # Defaults synchronized with failover.conf (production-tuned values).
@@ -112,6 +128,12 @@ METRICS_EXPORT_INTERVAL="${METRICS_EXPORT_INTERVAL:-5}"  # Export metrics every 
 FAILURE_THRESHOLD="${FAILURE_THRESHOLD:-5}"  # 5 consecutive failures (v4.7.1: 3→5 false-positive fix)
 RECOVERY_THRESHOLD="${RECOVERY_THRESHOLD:-20}"  # 20 consecutive successes
 EMERGENCY_THRESHOLD="${EMERGENCY_THRESHOLD:-15}"  # Score < 15 = emergency
+
+# Degraded threshold, configurable (was hardcoded 60 in three places).
+# Used by update_interface_counters() + is_standard_failover_needed();
+# editable via the web UI config editor (the field existed there already
+# but had no effect).
+FAILOVER_THRESHOLD_DOWN="${FAILOVER_THRESHOLD_DOWN:-60}"
 
 # Anti-flapping protection (synchronized with failover.conf)
 ANTI_FLAPPING_DELAY="${ANTI_FLAPPING_DELAY:-600}"  # 10 minutes between failovers
@@ -279,7 +301,7 @@ update_interface_counters() {
     local lte0_score="$2"
 
     # Update PRIMARY interface counters
-    if [[ $eth0_score -lt 60 ]]; then
+    if [[ $eth0_score -lt $FAILOVER_THRESHOLD_DOWN ]]; then
         # Primary is degraded — counts toward FAILURE_THRESHOLD (failover pathway)
         consecutive_failures[$PRIMARY_IFACE]=$((${consecutive_failures[$PRIMARY_IFACE]:-0} + 1))
         consecutive_recoveries[$PRIMARY_IFACE]=0
@@ -312,7 +334,7 @@ update_interface_counters() {
     fi
 
     # Update BACKUP interface counters (for diagnostics)
-    if [[ $lte0_score -lt 60 ]]; then
+    if [[ $lte0_score -lt $FAILOVER_THRESHOLD_DOWN ]]; then
         consecutive_failures[$BACKUP_IFACE]=$((${consecutive_failures[$BACKUP_IFACE]:-0} + 1))
         consecutive_recoveries[$BACKUP_IFACE]=0
     else
@@ -340,7 +362,7 @@ is_standard_failover_needed() {
     # v4.6.1 FIX: Skip if already on backup (prevent redundant failovers)
     [[ "$current_wan" == "primary" ]] \
         && [[ $(get_consecutive_failures "$PRIMARY_IFACE") -ge $FAILURE_THRESHOLD ]] \
-        && [[ $eth0_score -lt 60 ]] \
+        && [[ $eth0_score -lt $FAILOVER_THRESHOLD_DOWN ]] \
         && [[ $lte0_score -gt 70 ]] \
         && [[ $((lte0_score - eth0_score)) -gt 20 ]]
 }
@@ -561,7 +583,7 @@ is_failback_needed() {
         elapsed_min=$((time_on_backup / 60))
         local remaining_min
         remaining_min=$((remaining / 60))
-        log_info "Failback suppressed by MIN_BACKUP_TIME: ${elapsed_min}min elapsed, ${remaining_min}min remaining (60min policy)"
+        log_info "Failback suppressed by MIN_BACKUP_TIME: ${elapsed_min}min elapsed, ${remaining_min}min remaining ($((MIN_BACKUP_TIME / 60))min policy)"
         return 1
     fi
 
@@ -598,41 +620,30 @@ Failback-Status: Warte auf Stability-Requirements." \
         elapsed_min=$((stable_duration / 60))
         local remaining_min
         remaining_min=$((remaining / 60))
-        log_info "Failback suppressed by MIN_STABLE_DURATION: eth0 stable for ${elapsed_min}min, need ${remaining_min}min more (60min continuous stability required)"
+        log_info "Failback suppressed by MIN_STABLE_DURATION: eth0 stable for ${elapsed_min}min, need ${remaining_min}min more ($((MIN_STABLE_DURATION / 60))min continuous stability required)"
         return 1
     fi
 
-    log_info "Stability requirements met: ${time_on_backup}s on backup, ${stable_duration}s eth0 stable (both >= ${MIN_BACKUP_TIME}s)"
+    log_info "Stability requirements met: ${time_on_backup}s on backup (>= ${MIN_BACKUP_TIME}s), ${stable_duration}s eth0 stable (>= ${MIN_STABLE_DURATION}s)"
 
     # v4.7.0: Prefer primary after stability requirements met
-    # Rationale: After 60min on backup + 60min continuous stability,
-    # primary at MIN_FAILBACK_SCORE+ is clearly functional.
-    # LTE has 50GB monthly limit — prefer DSL for cost reasons.
+    # Rationale: After MIN_BACKUP_TIME on backup + MIN_STABLE_DURATION
+    # continuous stability, primary at MIN_FAILBACK_SCORE+ is clearly
+    # functional. LTE typically has a monthly data cap — prefer the primary
+    # for cost reasons.
+    #
+    # Dead code removed: the perfect-score override and the hysteresis check
+    # below this gate were unreachable since v4.7.0 — every score >=
+    # MIN_FAILBACK_SCORE (60) returns here, and the hysteresis path required
+    # >90 while only being reachable with <60. Behavior unchanged.
     local min_failback_score="${MIN_FAILBACK_SCORE:-60}"
     if [[ $eth0_score -ge $min_failback_score ]]; then
         log_info "PREFER PRIMARY: eth0=${eth0_score} >= ${min_failback_score} after stability period (${time_on_backup}s on backup, ${stable_duration}s stable) — triggering failback"
         return 0
     fi
 
-    # Special case: Perfect primary score (100) always triggers failback after stability
-    if [[ $eth0_score -eq 100 ]] && [[ $eth0_score -gt $lte0_score ]]; then
-        log_info "Perfect DSL score detected (100) - failback warranted after stability period"
-        return 0
-    fi
-
-    # Standard hysteresis check with intelligent capping
-    local hysteresis=20
-    local max_possible_delta
-    max_possible_delta=$((100 - lte0_score))
-
-    # Cap hysteresis to prevent impossible conditions
-    if [[ $hysteresis -gt $max_possible_delta ]]; then
-        hysteresis=$max_possible_delta
-        log_debug "Hysteresis capped to $hysteresis (max possible with lte0=$lte0_score)"
-    fi
-
-    # Standard failback condition with capped hysteresis
-    [[ $eth0_score -gt 90 ]] && [[ $eth0_score -gt $((lte0_score + hysteresis)) ]]
+    log_debug "Failback not warranted: eth0=$eth0_score < MIN_FAILBACK_SCORE=$min_failback_score despite stability"
+    return 1
 }
 
 # Process instant failover request (called from main loop, not signal handler)
@@ -750,7 +761,7 @@ process_manual_action_request() {
             else
                 log_info "Processing manual failback ($request_id): $PRIMARY_IFACE=$primary_score $BACKUP_IFACE=$backup_score"
                 perform_failover "$BACKUP_IFACE" "$PRIMARY_IFACE" "manual_failback" \
-                    || log_warning "Manual failback returned non-zero (likely anti-flapping)"
+                    || log_warning "Manual failback failed: route switch unsuccessful"
             fi
             ;;
         force_failover)
@@ -759,7 +770,7 @@ process_manual_action_request() {
             else
                 log_info "Processing manual force_failover ($request_id): $PRIMARY_IFACE=$primary_score $BACKUP_IFACE=$backup_score"
                 perform_failover "$PRIMARY_IFACE" "$BACKUP_IFACE" "manual_failover_force" \
-                    || log_warning "Manual force_failover returned non-zero (likely anti-flapping)"
+                    || log_warning "Manual force_failover failed: route switch unsuccessful"
             fi
             ;;
         *)
@@ -875,7 +886,7 @@ perform_failover() {
         if [[ $time_since_last -lt $ANTI_FLAPPING_DELAY ]]; then
             local remaining
             remaining=$((ANTI_FLAPPING_DELAY - time_since_last))
-            log_warning "Failback suppressed by anti-flapping (${remaining}s remaining of 600s cooldown, last failover was ${time_since_last}s ago)"
+            log_warning "Failback suppressed by anti-flapping (${remaining}s remaining of ${ANTI_FLAPPING_DELAY}s cooldown, last failover was ${time_since_last}s ago)"
             return 0  # Anti-flapping is not an error - return success to prevent service crash
         fi
     elif [[ "$reason" == "instant_event" ]]; then
@@ -885,7 +896,7 @@ perform_failover() {
         if [[ $time_since_last -lt $ANTI_FLAPPING_DELAY_INSTANT ]]; then
             local remaining
             remaining=$((ANTI_FLAPPING_DELAY_INSTANT - time_since_last))
-            log_warning "Instant failover suppressed by anti-flapping (${remaining}s remaining of 60s cooldown)"
+            log_warning "Instant failover suppressed by anti-flapping (${remaining}s remaining of ${ANTI_FLAPPING_DELAY_INSTANT}s cooldown)"
             return 0  # Anti-flapping is not an error - return success to prevent service crash
         fi
     fi
@@ -926,7 +937,7 @@ perform_failover() {
         if [[ "$to_interface" == "$BACKUP_IFACE" ]]; then
             # v4.6.1 FIX H4: Use atomic save_state instead of echo > file
             save_state "last_failover_to_backup" "$current_time"
-            log_info "Saved failover-to-backup timestamp: $current_time (MIN_BACKUP_TIME=60min check starts)"
+            log_info "Saved failover-to-backup timestamp: $current_time (MIN_BACKUP_TIME=$((MIN_BACKUP_TIME / 60))min check starts)"
         fi
 
         # Update current WAN state (for internal tracking)
@@ -1285,10 +1296,8 @@ main() {
             cleanup_cache
         fi
 
-        # Log performance stats (every 20 iterations = 10 minutes @ 30s interval)
-        if [[ $((iteration % 20)) -eq 0 ]]; then
-            log_info "$(get_performance_stats)"
-        fi
+        # Performance-stats log removed: cache/event counters live inside
+        # $(...) command-substitution subshells and were provably always zero.
 
         # Prüfe ob Script-Datei geändert wurde — exit 0 triggert systemd Restart mit neuer Version
         script_watch_check "$iteration"
@@ -1300,7 +1309,13 @@ main() {
         sleep_time=$((next_run - now))
 
         if [[ $sleep_time -gt 0 ]]; then
-            sleep "$sleep_time"
+            # Background sleep + wait — bash runs traps only after the current
+            # foreground command finishes, so a USR1 during `sleep 15` used to
+            # wait up to 15s. `wait` returns immediately on any trapped signal
+            # (>128) and the loop then processes instant_event_pending right
+            # away. This is what makes the "instant" failover actually instant.
+            sleep "$sleep_time" &
+            wait $! || true
         else
             log_warning "Check duration exceeded interval (overrun: $((sleep_time * -1))s)"
             # Don't sleep, run immediately but log the overrun

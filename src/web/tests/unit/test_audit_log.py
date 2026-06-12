@@ -83,9 +83,9 @@ def test_logger_singleton_raises_when_path_unwritable_and_require_file_true(
     monkeypatch.setattr(cfg, "AUDIT_LOG_REQUIRE_FILE", True)
     monkeypatch.setattr(audit_log, "_logger", None)
 
-    # Make the parent path unresolvable so RotatingFileHandler raises.
+    # Make the parent path unresolvable so WatchedFileHandler raises.
     monkeypatch.setattr(
-        audit_log, "RotatingFileHandler",
+        audit_log, "WatchedFileHandler",
         _raise_permission_error,
     )
 
@@ -109,7 +109,7 @@ def test_logger_singleton_falls_back_to_stderr_when_require_file_false(
     monkeypatch.setattr(cfg, "AUDIT_LOG_REQUIRE_FILE", False)
     monkeypatch.setattr(audit_log, "_logger", None)
     monkeypatch.setattr(
-        audit_log, "RotatingFileHandler",
+        audit_log, "WatchedFileHandler",
         _raise_permission_error,
     )
 

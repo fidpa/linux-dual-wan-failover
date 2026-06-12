@@ -27,7 +27,7 @@ src/web/
 ├── readers/                  # Read-only consumers
 │   ├── state_reader.py       # connection_metrics + wan_quality.prom -> snapshot
 │   ├── events_reader.py      # SQLite read-only (failover-events.db)
-│   └── config_reader.py      # failover.conf parser + 16-key whitelist + range validation
+│   └── config_reader.py      # base+override parser + 15-key whitelist + range validation
 ├── writers/                  # Mutation paths
 │   ├── manual_action_writer.py  # atomic file-trigger (flock + tempfile+rename)
 │   ├── service_controller.py    # NOPASSWD sudo: systemctl restart/is-active

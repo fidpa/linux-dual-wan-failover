@@ -50,7 +50,7 @@ There is a reason it isn't one.
 | Primitive | Path | Format | Owner | Reader |
 |-----------|------|--------|-------|--------|
 | Orchestrator PID | `/run/linux-dual-wan-failover/failover-monitor.pid` | int | failover-monitor | nmcli-failover-monitor |
-| Failover lock | `/run/linux-dual-wan-failover/failover-in-progress.lock` | `<PID>_<TIMESTAMP>` | nmcli-failover-monitor (emergency) | route-guardian (skips while present) |
+| Failover lock | `/run/failover-in-progress.lock` | `<PID>_<TIMESTAMP>` | routing.sh `safe_route_change` (every failover/failback) + nmcli-failover-monitor (emergency path) | route-guardian (skips its whole check cycle while present) |
 | Active WAN | `/run/linux-dual-wan-failover/wan-state/active_wan` | `eth0` or `lte0` | failover-monitor | route-guardian, metrics-collector |
 | Score snapshot | `/run/linux-dual-wan-failover/wan-state/connection_metrics` | JSON | failover-monitor | metrics-collector |
 | Quota snapshot | `/var/lib/linux-dual-wan-failover/quota-snapshot.json` | JSON (schema in `plugins/quota-providers/_schema/`) | quota provider | failover-monitor |

@@ -97,13 +97,7 @@ LOG_TO_STDOUT="${LOG_TO_STDOUT:-false}"
 # 4. VALIDATION — Umgebungsprüfung (→ Zeile 236)
 #    validate_environment()     Root-Check, Commands, Interface-Config
 #
-# 5. SIGNAL HANDLING & LIFECYCLE — Signale, Shutdown, Cleanup (→ Zeile 277)
-#    setup_signal_handlers()    INT/TERM/USR1/USR2 Handler registrieren
-#    handle_event_signal()      USR1 (Instant-Failover) und USR2 (Health-Check)
-#    graceful_shutdown()        State sichern + Cleanup + Exit 0
-#    cleanup_temp_files()       /tmp/failover_*_$$ aufräumen
-#
-# 6. UTILITY — Hilfsfunktionen und Notification (→ Zeile 351)
+# 5. UTILITY — Hilfsfunktionen und Notification (→ Zeile 351)
 #    is_numeric()               Integer/Float-Validierung
 #    get_timestamp()            Unix-Timestamp (Sekunden)
 #    get_timestamp_ms()         Unix-Timestamp (Millisekunden)
@@ -113,15 +107,10 @@ LOG_TO_STDOUT="${LOG_TO_STDOUT:-false}"
 #
 # ============================================================================
 
-# Default configuration (public library defaults; consumed by sourcing scripts)
-# shellcheck disable=SC2034
-readonly DEFAULT_CHECK_INTERVAL=30
-# shellcheck disable=SC2034
-readonly DEFAULT_FAILURE_THRESHOLD=3
-# shellcheck disable=SC2034
-readonly DEFAULT_RECOVERY_THRESHOLD=15
-# shellcheck disable=SC2034
-readonly DEFAULT_LOG_FILE="/var/log/linux-dual-wan-failover/failover-enhanced.log"
+# Default configuration
+# (Unused DEFAULT_CHECK_INTERVAL/_FAILURE_THRESHOLD/_RECOVERY_THRESHOLD/
+# _LOG_FILE constants removed — values were stale 2025 numbers and the real
+# defaults live in the monitor service; only the state dir is consumed here.)
 readonly DEFAULT_STATE_DIR="/run/wan-state"
 
 # State management paths (will be set after config load)
@@ -319,70 +308,11 @@ validate_environment() {
 # ============================================================================
 # SIGNAL HANDLING & LIFECYCLE
 # ============================================================================
-
-# Setup signal handlers for graceful shutdown and event integration
-setup_signal_handlers() {
-    trap 'graceful_shutdown' INT TERM
-    trap 'handle_event_signal USR1' USR1
-    trap 'handle_event_signal USR2' USR2
-}
-
-# Handle event signals with enhanced integration
-handle_event_signal() {
-    local signal="$1"
-
-    case "$signal" in
-        "USR1")
-            log "CRITICAL" "Event-driven signal received: USR1 - triggering instant failover"
-            # If events module is loaded, delegate to it; otherwise log
-            if declare -f handle_instant_failover_event >/dev/null 2>&1; then
-                handle_instant_failover_event
-            else
-                log "WARNING" "Events module not loaded - USR1 signal logged only"
-                # Trigger immediate check via existing mechanism
-                if declare -f trigger_immediate_check >/dev/null 2>&1; then
-                    trigger_immediate_check
-                fi
-            fi
-            ;;
-        "USR2")
-            log "INFO" "Maintenance signal received: USR2 - triggering health check"
-            if declare -f check_event_system_health >/dev/null 2>&1; then
-                local health_score
-                health_score=$(check_event_system_health)
-                log "INFO" "Event system health score: $health_score"
-            fi
-            ;;
-    esac
-}
-
-# Graceful shutdown procedure
-graceful_shutdown() {
-    log "INFO" "Shutting down failover monitor gracefully"
-
-    # Save final state
-    save_state "shutdown_time" "$(date +%s)"
-
-    # Cleanup temporary files
-    cleanup_temp_files
-
-    log "INFO" "Failover monitor shutdown complete"
-    exit 0
-}
-
-# Cleanup temporary files
-cleanup_temp_files() {
-    local cleaned=0
-
-    # Remove temp files with our PID
-    for temp_file in /tmp/failover_*_$$; do
-        if [[ -f "$temp_file" ]]; then
-            rm -f "$temp_file" && ((cleaned++)) || true
-        fi
-    done
-
-    [[ $cleaned -gt 0 ]] && log "DEBUG" "Cleaned $cleaned temporary files"
-}
+# setup_signal_handlers/handle_event_signal/graceful_shutdown/
+# cleanup_temp_files removed: dead code that exclusively referenced functions
+# of the long-removed events module (handle_instant_failover_event etc.).
+# The monitor service registers its own traps (handle_instant_failover,
+# handle_shutdown).
 
 # ============================================================================
 # UTILITY
@@ -533,6 +463,5 @@ send_notification() {
 
 # Export functions for use by other modules
 export -f log save_state load_state die validate_environment
-export -f setup_signal_handlers graceful_shutdown cleanup_temp_files
 export -f is_numeric get_timestamp get_timestamp_ms get_monotonic_time get_human_time file_older_than
 export -f send_notification

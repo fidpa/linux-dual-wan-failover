@@ -28,7 +28,12 @@ def test_history_returns_seeded_events(client, events_db):
     assert data["count"] == 3
     assert {e["event_type"] for e in data["events"]} == {"failover", "failback"}
     # Newest first.
-    assert data["events"][0]["timestamp"].startswith("2026-05-01")
+    # Newest first — the fixture seeds relative to "now" (2d/13d back), so
+    # assert dynamically instead of a hardcoded date (time-bomb fix).
+    from datetime import datetime, timedelta
+
+    newest_day = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+    assert data["events"][0]["timestamp"].startswith(newest_day)
 
 
 def test_history_invalid_days_falls_back_to_default(client, events_db):

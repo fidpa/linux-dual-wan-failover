@@ -61,8 +61,21 @@ EVENTS_DB: Path = Path(
         f"/var/lib/{PROJECT_NAME}/failover-metrics-collector/failover-events.db",
     )
 )
+# Base config: static, read-only for the web app (used to display the
+# effective defaults). The UI never writes this file.
 CONFIG_PATH: Path = Path(
     os.environ.get("FAILOVER_WEB_CONFIG_PATH", f"/etc/{PROJECT_NAME}/failover.conf")
+)
+# Override config: the ONLY file the UI writes (via the root-validating
+# install helper). The daemon sources it AFTER the base config, so override
+# values win (bash last-wins). Keeping operator edits in a separate file
+# means the base config can stay pristine/versioned and a UI edit can never
+# clobber non-whitelisted settings.
+OVERRIDE_CONFIG_PATH: Path = Path(
+    os.environ.get(
+        "FAILOVER_WEB_OVERRIDE_CONFIG_PATH",
+        f"/etc/{PROJECT_NAME}/failover-overrides.conf",
+    )
 )
 STAGING_CONFIG_PATH: Path = Path(
     os.environ.get(
@@ -88,8 +101,8 @@ CONFIG_LOCK: Path = Path(
 
 # Path of the root-owned config installer. The installer re-validates every
 # line against the same schema this app uses, then atomically renames the
-# staged file into ``CONFIG_PATH``. failover-web's sudoers grants exactly
-# this command (no arguments — both source and destination are baked in).
+# staged file into ``OVERRIDE_CONFIG_PATH``. failover-web's sudoers grants
+# exactly this command (no arguments — both source and destination are baked in).
 INSTALL_HELPER: str = os.environ.get(
     "FAILOVER_WEB_INSTALL_HELPER", "/usr/local/sbin/install-failover-conf"
 )
@@ -124,9 +137,11 @@ AUDIT_LOG: Path = Path(
 # Production mode: refuse to start when the audit log is not writable. Tests
 # and local dev set this to 0 to allow a stderr fallback.
 AUDIT_LOG_REQUIRE_FILE: bool = os.environ.get("FAILOVER_WEB_AUDIT_LOG_REQUIRE_FILE", "1") == "1"
-LOG_MAX_BYTES: int = 10 * 1024 * 1024  # 10 MB
-LOG_BACKUP_COUNT: int = 5
-AUDIT_LOG_BACKUP_COUNT: int = 10
+# LOG_MAX_BYTES/LOG_BACKUP_COUNT/AUDIT_LOG_BACKUP_COUNT removed: in-process
+# rotation (RotatingFileHandler) is not multiprocess-safe — with 2 gunicorn
+# workers sharing one file, doRollover() permanently fails once the size cap
+# is hit and the log goes dead. Rotation is now logrotate's job (see
+# systemd/failover-web.logrotate); the handlers are WatchedFileHandler.
 
 # ---------------------------------------------------------------------------
 # SSE / freshness

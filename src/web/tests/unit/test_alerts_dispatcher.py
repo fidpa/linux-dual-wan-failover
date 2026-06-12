@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 
 def _write_plugin(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

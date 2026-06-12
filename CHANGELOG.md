@@ -5,6 +5,180 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-06-12
+
+Findings from a full code review of the upstream production deployment,
+ported here. Three of the fixes concern paths that had **never worked** —
+the unit tests mocked `subprocess.run`/route changes, so only a live
+end-to-end test could expose them.
+
+### Fixed
+
+- **Emergency route recovery was a silent no-op.**
+  `emergency_restore_any_route()` (routing.sh) called
+  `check_interface_status()`, which is defined only in `route-guardian.sh`
+  — a *different process*. Inside the orchestrator that meant
+  `command not found`, both restore attempts were skipped, and the
+  function always ended at "Could not restore any route". It now uses a
+  local `_interface_link_up()` helper (`ip link` + sysfs carrier).
+
+- **Web-UI config editor could never install.** The root helper
+  (`install-failover-conf`) requires every line of the staged file to be
+  a whitelisted integer tunable — but the staged file was the *full*
+  `failover.conf`, whose non-whitelisted lines (interfaces, test targets,
+  …) always failed validation. Fixed via the override design (see
+  *Changed*).
+
+- **sudo from the Web-UI was blocked by implicit `NoNewPrivileges`.**
+  The unit's seccomp-implying hardening options
+  (`SystemCallArchitectures`, `MemoryDenyWriteExecute`, …) force
+  `NoNewPrivileges=yes` for non-root services, silently overriding the
+  explicit `NoNewPrivileges=false` — every `sudo` call (config install,
+  daemon restart) failed with "no new privileges". Those options are
+  removed (the mount-based sandbox stays; escalation remains scoped to
+  two commands via sudoers). `ReadWritePaths=/etc/<project>` is added
+  because sudo children inherit the unit's mount namespace, where
+  `ProtectSystem=strict` made `/etc` read-only for the root helper too.
+
+- **Web-UI log could go permanently dead.** `RotatingFileHandler` from two
+  gunicorn workers sharing one file is not multiprocess-safe: once the
+  10 MB cap was hit, `doRollover()` failed on every record (observed
+  upstream: 1076 logging errors in 3 days, log frozen). Additionally,
+  gunicorn's `--access-logfile`/`--error-logfile` pointed at the *same*
+  file as the app handler. Now: `WatchedFileHandler` + logrotate policy
+  (`systemd/failover-web.logrotate`, installed by
+  `install.sh --with-web-ui`); gunicorn logs to stderr → journald.
+
+- **Route-guardian could fight an in-flight failover.** The lockfile
+  (`/run/failover-in-progress.lock`) was only ever created by the nmcli
+  *emergency* path — regular score-based/manual failovers ran without
+  pausing the guardian, which could revert a fresh metric swap in the
+  window before `active_wan` is persisted. `safe_route_change()` now
+  creates the lock (PID_TIMESTAMP, 30 s hold with ownership check,
+  immediate release on error). The guardian check also moved from
+  `monitor_default_routes()` to the top of
+  `comprehensive_route_health_check()`: duplicate-cleanup, NM-metric
+  repair and conflict resolution also mutate routes and previously kept
+  running during a failover.
+
+- **USR1 "instant" failover could wait a full check interval.** Bash runs
+  traps only after the current foreground command finishes, so a USR1
+  arriving during `sleep 15` waited up to 15 s. The main loop now uses
+  `sleep … & wait $!`, which returns immediately on any trapped signal —
+  the same pattern route-guardian already used.
+
+- **`systemctl stop route-guardian` ran into a 90 s timeout + SIGKILL.**
+  The SIGTERM trap returned without ending the `while true` loop. A
+  shutdown flag now ends the loop at the top of the next iteration.
+
+- **Double rollback on route-change errors.** `safe_route_change()` had an
+  ERR trap *in addition to* explicit `rollback_route_change` calls — on an
+  empty gateway lookup both fired, the second against an already-deleted
+  backup file, escalating into a false-positive "manual intervention
+  required" cascade. The ERR trap is removed; the explicit error paths
+  cover every failure mode.
+
+- **Rollback could fail with "File exists".**
+  `restore_routes_from_backup()` deleted only *one* default route before
+  `ip route restore`; with both WAN routes present the restore collided
+  with the remaining one. All default routes are removed first now.
+
+- **nmcli fallback never found the daemon.** The `pgrep -f` fallback
+  matched against the install path while the process cmdline shows the
+  path systemd actually executed. On a stale PID file the trigger fell
+  straight through to the raw emergency path. The emergency path also
+  added the backup route with metric 100 — a pre-metric-demotion relic
+  that created a duplicate route the guardian had to clean up. It now
+  only adds the route if missing, with metric 200.
+
+- **Dead DHCP-lease gateway fallback.** `get_gateway_from_dhcp()` parsed
+  `/var/lib/dhcp/dhclient.<iface>.leases`, which never exists on
+  NetworkManager systems (internal DHCP client). Replaced with
+  `get_gateway_from_nm()` (`nmcli -g IP4.GATEWAY`).
+
+- **Web test suite had a built-in time bomb.** The seeded history events
+  used hardcoded dates that fall out of the default `days=30` query
+  window; fixtures now seed relative to "now".
+
+- **`diag` timeout now covers the whole run.** Previously it applied only
+  to `proc.wait()` after the read loop — a slowly-dripping `traceroute`
+  could stream for 60–90 s despite the 30 s limit.
+
+### Changed
+
+- **Config override design.** The Web-UI no longer patches
+  `failover.conf`. Operator edits land in
+  `/etc/<project>/failover-overrides.conf` (integer tunables only,
+  root-validated), which the daemon sources *after* the base config
+  (bash last-wins). The base config stays pristine; `GET /api/config`
+  reports the effective (merged) values plus both paths.
+  New env knob: `FAILOVER_WEB_OVERRIDE_CONFIG_PATH`.
+
+- **`FAILOVER_THRESHOLD_DOWN` is now actually wired up.** The degraded
+  threshold was hardcoded to 60 in three places; the config value (and
+  the web UI field) had no effect. `CHECK_IPS`/`DNS_SERVERS` similarly
+  no longer overwrite config-provided values.
+
+- **Freshness thresholds match the collector cadence.** The shipped unit
+  sets `FAILOVER_WEB_STATE_STALE_SECONDS=75` /
+  `FAILOVER_WEB_STATE_MISSING_SECONDS=180` — with ~60 s prom writes the
+  30 s default flagged "stale" in steady state.
+
+- **gunicorn 25.x control socket**: the unit sets
+  `HOME=/var/lib/failover-web` (the user's real home is read-only under
+  `ProtectHome`, which produced a "Control server error" on every start).
+
+### Added
+
+- **CI: web-UI test suite finally runs in CI.** A new `pytest` job runs all
+  136 tests on Python 3.10 (the documented floor) and 3.12 — none of the
+  web-UI fixes in this release would have been caught by the previous
+  pipeline, which never executed `src/web/tests/`.
+- **CI: secret scanning.** `gitleaks` scans the full git history on every
+  push/PR (`.gitleaksignore` carries the one audited false positive — the
+  placeholder `admin:secret` example in the quota custom-template docs).
+- **CI: config syntax gates.** `visudo -cf` for the sudoers fragment,
+  `logrotate -d` for the new logrotate policy, and `bash -n` for the
+  sourced config examples (a syntax error in `failover.conf` bricks the
+  daemon at startup).
+
+### Changed (CI)
+
+- **The systemd unit check can actually fail now.** It previously ran
+  `systemd-analyze verify || true` — a check that can never fail is a fake
+  check. The job now stubs the `Exec*` binary paths referenced by the
+  units (the only legitimately-missing pieces on a runner) and treats any
+  remaining verify error as a hard failure.
+- **ruff lints `src/web/`** (the two pre-existing unused-import findings
+  are fixed in this release). `ruff format --check` stays scoped to the
+  two standalone scripts — reformatting 31 web files wholesale would bury
+  the diff history for zero behavioral gain.
+- **shellcheck covers the full bash surface**: now also `install.sh`, the
+  root-side config installer (`src/web/install-failover-conf.sh`), and the
+  bats helpers/mocks.
+- Workflow hygiene: `permissions: contents: read` (least privilege) and a
+  concurrency group that cancels superseded runs.
+
+### Removed
+
+- **`FAILOVER_THRESHOLD_UP` / `HYSTERESIS_GAP`.** The daemon never
+  evaluated either: failback is governed by `MIN_FAILBACK_SCORE` +
+  `MIN_BACKUP_TIME` + `MIN_STABLE_DURATION`, and the score-hysteresis
+  code path below the `MIN_FAILBACK_SCORE` gate was unreachable dead
+  code (it required a score >90 on a path only reachable with <60).
+  The web UI field is gone (a knob without effect fakes control);
+  the config example keeps both names commented out as historical
+  documentation. The dead branch in `is_failback_needed()` is removed —
+  behavior is unchanged.
+
+- Dead code: `restore_missing_backup_route()` (monitoring-only stub with
+  inverted log logic, no callers), the events-module signal-handler
+  remnants in `common.sh` (`setup_signal_handlers`,
+  `handle_event_signal`, `graceful_shutdown`, `cleanup_temp_files` —
+  they referenced functions that no longer exist), the always-zero
+  performance-stats log line (its counters live in command-substitution
+  subshells and can never accumulate; documented in `performance.sh`).
+
 ## [0.3.0] — 2026-06-10
 
 ### Fixed

@@ -8,7 +8,7 @@ from web.readers import config_reader
 def test_parse_conf_handles_assignments_comments_and_quotes():
     text = """# header
 FAILOVER_THRESHOLD_DOWN=60
-FAILOVER_THRESHOLD_UP=80   # inline comment
+RECOVERY_THRESHOLD=80   # inline comment
 ANTI_FLAPPING_DELAY = 600
 QUOTED="hello"
 SINGLE='world'
@@ -17,7 +17,7 @@ NOT_AN_ASSIGNMENT
 """
     parsed = config_reader.parse_conf(text)
     assert parsed["FAILOVER_THRESHOLD_DOWN"] == "60"
-    assert parsed["FAILOVER_THRESHOLD_UP"] == "80"
+    assert parsed["RECOVERY_THRESHOLD"] == "80"
     assert parsed["ANTI_FLAPPING_DELAY"] == "600"
     assert parsed["QUOTED"] == "hello"
     assert parsed["SINGLE"] == "world"
@@ -64,12 +64,31 @@ def test_read_whitelisted_config_returns_descriptors_with_current(monkeypatch, t
     )
     from web import config as cfg
     monkeypatch.setattr(cfg, "CONFIG_PATH", conf_path)
+    monkeypatch.setattr(cfg, "OVERRIDE_CONFIG_PATH", tmp_path / "absent-overrides.conf")
 
     descs = config_reader.read_whitelisted_config()
     by_name = {d.name: d for d in descs}
     assert by_name["FAILOVER_THRESHOLD_DOWN"].current_value == 55
     assert by_name["MIN_FAILBACK_SCORE"].current_value == 70
-    assert by_name["FAILOVER_THRESHOLD_UP"].current_value is None
+    assert by_name["ANTI_FLAPPING_DELAY"].current_value is None
+    # FAILOVER_THRESHOLD_UP was removed from the schema (the daemon never
+    # evaluates it) — it must not resurface as a UI field.
+    assert "FAILOVER_THRESHOLD_UP" not in by_name
     # Schema bounds preserved
     assert by_name["FAILOVER_THRESHOLD_DOWN"].min_value == 0
     assert by_name["FAILOVER_THRESHOLD_DOWN"].max_value == 100
+
+
+def test_read_whitelisted_config_merges_override_last_wins(monkeypatch, tmp_path):
+    """The override file wins over the base config (daemon source order)."""
+    base = tmp_path / "failover.conf"
+    base.write_text("FAILOVER_THRESHOLD_DOWN=60\nMIN_FAILBACK_SCORE=60\n", encoding="utf-8")
+    override = tmp_path / "failover-overrides.conf"
+    override.write_text("FAILOVER_THRESHOLD_DOWN=45\n", encoding="utf-8")
+    from web import config as cfg
+    monkeypatch.setattr(cfg, "CONFIG_PATH", base)
+    monkeypatch.setattr(cfg, "OVERRIDE_CONFIG_PATH", override)
+
+    by_name = {d.name: d for d in config_reader.read_whitelisted_config()}
+    assert by_name["FAILOVER_THRESHOLD_DOWN"].current_value == 45  # override wins
+    assert by_name["MIN_FAILBACK_SCORE"].current_value == 60  # base shines through

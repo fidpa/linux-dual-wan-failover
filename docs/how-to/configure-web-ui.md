@@ -41,8 +41,10 @@ The flag adds these steps to the regular install:
   and installs `src/web/requirements.txt`.
 - Installs the validating config helper to
   `/usr/local/sbin/install-failover-conf` (mode `0750`, owned `root:root`).
-- Installs `failover-web.service`, the sudoers fragment, and the
-  tmpfiles fragment.
+- Installs `failover-web.service`, the sudoers fragment, the tmpfiles
+  fragment, and the logrotate policy (`/etc/logrotate.d/failover-web` —
+  the app logs via `WatchedFileHandler` and does no in-process rotation,
+  which would not be multiprocess-safe across the two gunicorn workers).
 - Reloads systemd; the service is **not** enabled — that is your call.
 
 The daemon's `failover-monitor.service` is updated by `install_systemd_units`

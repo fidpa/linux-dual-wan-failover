@@ -1,0 +1,9 @@
+# gitleaks false-positive allowlist (fingerprints: commit:file:rule:line).
+#
+# custom-template/collect-quota.sh carries a commented-out documentation
+# example (`curl -s -u admin:secret https://isp.example/api`) — placeholder
+# credentials against an RFC-2606 example domain, not a real secret. The
+# current blob additionally carries an inline `gitleaks:allow` marker; these
+# fingerprints cover the historical commits that predate the marker.
+b91fe9c06d676e4dea198dcd73d589f1f0c48ab1:plugins/quota-providers/custom-template/collect-quota.sh:curl-auth-user:24
+0e07688930824628370cf33e5d828f9aa67b43e0:plugins/quota-providers/custom-template/collect-quota.sh:curl-auth-user:24
