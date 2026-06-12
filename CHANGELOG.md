@@ -5,6 +5,28 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-06-12
+
+First live run of the v0.4.0 CI pipeline caught two runner-environment
+issues in the new jobs themselves (the code checks all passed):
+
+### Fixed
+
+- **CI: logrotate gate failed with `unknown group 'failover-web'`.** The
+  unit-verify step created the user with `wan-state` as primary group but
+  never created a `failover-web` group, which the logrotate policy's
+  `create 0644 failover-web failover-web` line requires. The step now
+  creates both groups (matching the real `install.sh` semantics:
+  dedicated primary group + `wan-state` supplementary).
+- **CI: gitleaks flagged `.gitleaksignore` itself.** The v0.4.0 revision
+  of the allowlist quoted the placeholder-credentials example verbatim in
+  its own comment and thereby matched the `curl-auth-user` rule. The
+  comment now describes the example without reproducing the matchable
+  pattern, and a fingerprint covers the old blob that remains in git
+  history. (The local pre-push scan had run before the file was
+  committed, so the history scan never saw it — lesson: verify
+  `gitleaks` against the actual commit, not the working tree.)
+
 ## [0.4.0] — 2026-06-12
 
 Findings from a full code review of the upstream production deployment,

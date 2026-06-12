@@ -145,9 +145,13 @@ jobs:
             | while read -r bin; do
                 [[ -e "$bin" ]] || sudo install -D -m 755 /dev/null "$bin"
               done
-          # The units reference these as User=/Group=/SupplementaryGroups=.
+          # The units reference these as User=/Group=/SupplementaryGroups=,
+          # and the logrotate policy's `create` line needs BOTH the user and
+          # a group named failover-web (v0.4.0 only created wan-state, which
+          # failed logrotate -d with "unknown group 'failover-web'").
           sudo groupadd --system wan-state 2>/dev/null || true
-          sudo useradd --system -g wan-state -s /usr/sbin/nologin failover-web 2>/dev/null || true
+          sudo groupadd --system failover-web 2>/dev/null || true
+          sudo useradd --system -g failover-web -G wan-state -s /usr/sbin/nologin failover-web 2>/dev/null || true
           # cd into systemd/ so verify resolves sibling units (After=,
           # Wants=) from the repo instead of complaining they're missing.
           cd systemd
