@@ -25,9 +25,11 @@ discipline that doesn't require any locking on the read side.
 | `/run/linux-dual-wan-failover/failover-in-progress.lock` | `nmcli-failover-monitor` (only on emergency failover) | `route-guardian` (skips while present) |
 | `/run/linux-dual-wan-failover/wan-state/active_wan` | `failover-monitor` (after each route change) | `route-guardian`, `failover-metrics-collector` |
 | `/run/linux-dual-wan-failover/wan-state/connection_metrics` | `failover-monitor` (every 5 s) | `failover-metrics-collector` |
+| `/run/linux-dual-wan-failover/wan-state/pending_failover_id` | `nmcli-failover-monitor` (before USR1) | `failover-monitor` (consumes it) |
+| `/run/linux-dual-wan-failover/wan-state/last_failover_id` | `routing.sh` / `nmcli-failover-monitor` (== lockfile ID) | `failover-metrics-collector` |
 | `/var/lib/linux-dual-wan-failover/quota-snapshot.json` | quota-provider plugin | `failover-monitor` |
 | `/var/lib/linux-dual-wan-failover/route-guardian/state.json` | `route-guardian` | route-guardian (only) |
-| `/var/lib/linux-dual-wan-failover/metrics/failover-events.db` | `failover-metrics-collector` | metrics-collector (only) |
+| `/var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db` | `failover-metrics-collector` | metrics-collector (only) |
 
 ## Atomic-write pattern
 

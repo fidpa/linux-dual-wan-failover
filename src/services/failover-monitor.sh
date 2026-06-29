@@ -921,6 +921,16 @@ perform_failover() {
     # v4.2.0 ARCHITECTURE REVIEW FIX #6: Update timestamp AFTER route change (allow retry on failure)
     # v4.1.2 rationale (prevent USR1 race) was valid, but created worse problem: failed failover locks out retry
     # Trade-off: Accept theoretical USR1 race (rare) to allow retry on genuine route-change failure (critical)
+
+    # Determine the failover Event-ID (Correlation-ID) BEFORE the route change.
+    # instant_event adopts the pending_failover_id minted by nmcli-monitor; every
+    # other reason mints fresh. safe_route_change / _create_failover_lockfile use
+    # the same in-process variable → one failover == one ID across all services +
+    # event DB. Best-effort, never fatal.
+    if declare -F failover_event_id_adopt_pending >/dev/null 2>&1; then
+        FAILOVER_EVENT_ID=$(failover_event_id_adopt_pending)
+    fi
+
     # Execute route changes FIRST (via routing.sh module)
     if safe_route_change "$to_interface" "$from_interface"; then
         # SUCCESS: Now update timestamp (after successful route change)
@@ -931,7 +941,10 @@ perform_failover() {
         save_state "last_failover" "$current_time"
 
         # v4.6.0: Log FAILOVER only AFTER successful route change (reduce log noise)
-        log_info "FAILOVER: $from_interface → $to_interface | reason=$reason | scores=(eth0=$eth0_score, lte0=$lte0_score) | counters=(failures=$(get_consecutive_failures "$PRIMARY_IFACE"), recoveries=$(get_consecutive_recoveries "$PRIMARY_IFACE")) | delta=$((lte0_score - eth0_score))"
+        # Stamp FAILOVER_EVENT_ID into the file log (greppable across services).
+        log_info_structured "FAILOVER: $from_interface → $to_interface | reason=$reason | scores=(eth0=$eth0_score, lte0=$lte0_score) | counters=(failures=$(get_consecutive_failures "$PRIMARY_IFACE"), recoveries=$(get_consecutive_recoveries "$PRIMARY_IFACE")) | delta=$((lte0_score - eth0_score))" \
+            "FAILOVER_EVENT_ID=${FAILOVER_EVENT_ID:-unknown}" \
+            "REASON=$reason" "FROM_INTERFACE=$from_interface" "TO_INTERFACE=$to_interface"
 
         # v4.3.0: Save timestamp when failing over TO backup (for MIN_BACKUP_TIME check)
         if [[ "$to_interface" == "$BACKUP_IFACE" ]]; then
@@ -950,10 +963,21 @@ perform_failover() {
         # Save active interface to state file (for failover-metrics-collector)
         save_state "active_wan" "$to_interface"
 
+        # Canonical last_failover_id publish (regular path) — deliberately AFTER
+        # save_state(active_wan), not in routing.sh:_create_failover_lockfile: the
+        # collector only reads last_failover_id once it detects the active_wan
+        # change, so the ID must become consistent exactly here (pivot
+        # metric/event → logs). The nmcli emergency path publishes separately.
+        if declare -F failover_event_id_publish >/dev/null 2>&1; then
+            failover_event_id_publish
+        fi
+
         log_notice "Failover completed: now using $to_interface"
         return 0
     else
-        log_error "Failover FAILED: route switch unsuccessful - timestamp NOT updated (retry possible)"
+        log_error_structured "Failover FAILED: route switch unsuccessful - timestamp NOT updated (retry possible)" \
+            "FAILOVER_EVENT_ID=${FAILOVER_EVENT_ID:-unknown}" \
+            "REASON=$reason" "FROM_INTERFACE=$from_interface" "TO_INTERFACE=$to_interface"
         # DON'T update last_failover_time on failure → next check can retry immediately if conditions still warrant failover
         return 1
     fi

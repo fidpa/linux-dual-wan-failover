@@ -47,22 +47,27 @@ groups:
 ## SQLite event log
 
 ```bash
-sqlite3 /var/lib/linux-dual-wan-failover/metrics/failover-events.db <<'SQL'
+sqlite3 /var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db <<'SQL'
 .headers on
 .mode column
 SELECT
-    datetime(timestamp, 'unixepoch') AS at,
+    datetime(timestamp) AS at,
     event_type,
     from_interface,
     to_interface,
-    primary_score,
-    backup_score,
-    reason
-FROM events
+    primary_score_before,
+    backup_score_before,
+    reason,
+    event_id
+FROM failover_events
 ORDER BY timestamp DESC
 LIMIT 20;
 SQL
 ```
+
+`timestamp` is stored as a local datetime string (not a Unix epoch), so it is
+read back directly. `event_id` is the failover Correlation-ID — see
+[../how-to/trace-failover.md](../how-to/trace-failover.md).
 
 The schema is intentionally simple — one row per failover/failback,
 one row per anomaly (lockfile stale, score-cap-applied, etc.).

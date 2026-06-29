@@ -166,6 +166,24 @@ in `PID_TIMESTAMP` format. Its presence tells `route-guardian` not to clean up r
 during an active failover. It is not a mutex; there is only ever one writer per state file.
 See [`docs/explanation/state-file-ownership.md`](docs/explanation/state-file-ownership.md).
 
+### Every failover has a Correlation-ID
+
+A failover crosses four services (`nmcli-failover-monitor` → `failover-monitor` →
+`routing.sh` → `route-guardian`) plus the metrics collector. Each event gets one
+**Event-ID** (the `PID_TIMESTAMP` lockfile content), minted at the earliest detection
+point, handed across the USR1/lockfile boundaries, stamped into every service log as
+`FAILOVER_EVENT_ID=<id>`, and written to the `event_id` column of the events database.
+This is the same idea as a distributed-tracing trace ID: it turns per-service logs that
+each see only their own slice into one reconstructable timeline. Trace a single failover
+end-to-end — symptom (DB row) to cause (service-log waterfall) — with:
+
+```bash
+src/tools/trace-failover.sh --list 10   # recent events with their Event-IDs
+src/tools/trace-failover.sh <PID_TIMESTAMP>
+```
+
+See [`docs/how-to/trace-failover.md`](docs/how-to/trace-failover.md).
+
 ### Asymmetric thresholds prevent flapping
 
 The orchestrator uses a 20-point hysteresis gap: fail over when the primary drops below
@@ -256,7 +274,8 @@ your reverse proxy in front of it (the repo ships
 as a starting point), point your browser at it, and you have:
 
 - live state, latency, loss, jitter, DNS/HTTP scores per interface;
-- 30-day failover event history (read-only from the metrics SQLite DB);
+- 30-day failover event history (read-only from the metrics SQLite DB), with a
+  **Trace** column exposing each event's Correlation-ID for cross-service tracing;
 - whitelisted config tuning (15 keys, range-validated, root-owned installer
   re-validates before write);
 - 1 / 60 s rate-limit per source-IP, CSRF + Origin/Referer check, JSON-Lines

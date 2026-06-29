@@ -13,6 +13,7 @@ This documentation follows the [Diataxis](https://diataxis.fr/) framework:
 | …get running for the first time | [tutorial/01-quickstart.md](tutorial/01-quickstart.md) |
 | …install on production from source | [how-to/install-from-source.md](how-to/install-from-source.md) |
 | …debug a real failover incident | [how-to/debug-failover.md](how-to/debug-failover.md) |
+| …trace one failover across all services | [how-to/trace-failover.md](how-to/trace-failover.md) |
 | …test failover safely without breaking SSH | [how-to/safe-failover-testing.md](how-to/safe-failover-testing.md) |
 | …add Mattermost alerts | [how-to/configure-mattermost.md](how-to/configure-mattermost.md) |
 | …track LTE quota | [how-to/configure-quota-tracking.md](how-to/configure-quota-tracking.md) |

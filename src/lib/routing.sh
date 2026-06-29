@@ -34,6 +34,16 @@ if ! declare -F sfu_write_file >/dev/null 2>&1; then
     }
 fi
 
+# Failover Event-ID (Correlation-ID) helper — best-effort, never fatal: a
+# missing helper must not block a failover (the lockfile mint falls back inline
+# below). Lives next to this module in src/lib/. See event-id.sh.
+_routing_self_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+if [[ -f "${_routing_self_dir}/event-id.sh" ]]; then
+    # shellcheck source=src/lib/event-id.sh
+    source "${_routing_self_dir}/event-id.sh" || true
+fi
+unset _routing_self_dir
+
 # ============================================================================
 # ROUTING CONFIGURATION
 # ============================================================================
@@ -157,7 +167,23 @@ restore_routes_from_backup() {
 # Create the route-guardian pause lockfile (PID_TIMESTAMP ownership).
 # Non-fatal on failure — the failover must proceed even if /run is unwritable.
 _create_failover_lockfile() {
-    _failover_lock_id="$$_$(date +%s)"
+    # The lockfile ID IS the failover Event-ID (Correlation-ID). perform_failover()
+    # or the nmcli emergency path usually set FAILOVER_EVENT_ID already; if not (a
+    # defensive direct call), mint inline — same PID_TIMESTAMP format so the
+    # lockfile content stays parseable for route-guardian's stale detection.
+    if [[ -z "${FAILOVER_EVENT_ID:-}" ]]; then
+        if declare -F failover_event_id_generate >/dev/null 2>&1; then
+            FAILOVER_EVENT_ID="$(failover_event_id_generate)"
+        else
+            FAILOVER_EVENT_ID="$$_$(date +%s)"
+        fi
+        export FAILOVER_EVENT_ID
+    fi
+    _failover_lock_id="$FAILOVER_EVENT_ID"
+
+    # Note: last_failover_id (for the collector) is NOT published here but
+    # canonically in perform_failover() AFTER the active_wan change — the
+    # collector only reads last_failover_id once it detects the active_wan change.
     if echo "$_failover_lock_id" > "$FAILOVER_LOCKFILE" 2>/dev/null; then
         log "DEBUG" "Failover lockfile created: $_failover_lock_id"
     else
@@ -203,7 +229,11 @@ safe_route_change() {
     local old_interface="$2"
     local backup_file
 
-    log "INFO" "Starting safe route change: $old_interface -> $new_interface"
+    # Stamp the route-change "span" with the Event-ID (lands as
+    # [FAILOVER_EVENT_ID=…] in the file log → greppable across services).
+    log_info_structured "Starting safe route change: $old_interface -> $new_interface" \
+        "FAILOVER_EVENT_ID=${FAILOVER_EVENT_ID:-unknown}" \
+        "FROM_INTERFACE=$old_interface" "TO_INTERFACE=$new_interface"
 
     # Create backup of current routes
     if ! backup_file=$(backup_current_routes); then
@@ -231,7 +261,9 @@ safe_route_change() {
     if execute_route_change "$new_interface" "$new_gateway"; then
         # Verify the change worked
         if verify_route_change "$new_interface" "$new_gateway"; then
-            log "INFO" "Route change successful and verified"
+            log_info_structured "Route change successful and verified" \
+                "FAILOVER_EVENT_ID=${FAILOVER_EVENT_ID:-unknown}" \
+                "TO_INTERFACE=$new_interface"
             rm -f "$backup_file"
             # Hold the lock through the stabilization window (NM may re-add
             # routes up to ~1s after link events; 30s = 3 guardian cycles).

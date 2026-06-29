@@ -37,6 +37,7 @@ jobs:
             --shell=bash \
             src/lib/*.sh \
             src/services/*.sh \
+            src/tools/*.sh \
             src/web/install-failover-conf.sh \
             plugins/alerting/*.sh \
             plugins/quota-providers/custom-template/*.sh \
@@ -62,6 +63,7 @@ jobs:
           bashate --ignore E006,E040 \
             src/lib/*.sh \
             src/services/*.sh \
+            src/tools/*.sh \
             plugins/alerting/*.sh
 
   bats:

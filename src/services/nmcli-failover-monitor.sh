@@ -58,6 +58,12 @@ export LOG_TO_STDOUT="${LOG_TO_STDOUT:-false}"
 # Ensure log directory exists (systemd `LogsDirectory=` covers this in production).
 mkdir -p "$(dirname "$LOG_FILE")"
 
+# Failover Event-ID (Correlation-ID) helper — best-effort, never fatal. Mints
+# the ID at the earliest detection point and hands it to failover-monitor via
+# pending_failover_id (handoff model: see event-id.sh).
+# shellcheck source=../lib/event-id.sh
+source "${LIB_DIR}/event-id.sh" 2>/dev/null || true
+
 # ============================================================================
 # INSTANT FAILOVER FUNCTIONS
 # ============================================================================
@@ -93,8 +99,21 @@ trigger_instant_failover() {
     local interface=$1
     local event=$2
 
-    # Event 5: Kritischer Failover-Trigger
+    # Mint the failover Event-ID (Correlation-ID) at the earliest point and hand
+    # it to failover-monitor via pending_failover_id — BEFORE the signal is sent
+    # (signal-safe: the receiver's USR1 trap does no I/O). The same ID is reused
+    # for the emergency lockfile below → one failover == one ID across all paths.
+    local _event_id=""
+    if declare -F failover_event_id_mint >/dev/null 2>&1; then
+        _event_id="$(failover_event_id_mint)"
+        failover_event_id_write_pending "$_event_id"
+    else
+        _event_id="$$_$(date +%s)"
+    fi
+
+    # Event 5: critical failover trigger
     log_critical_structured "INSTANT failover triggered" \
+        "FAILOVER_EVENT_ID=${_event_id}" \
         "INTERFACE=${interface}" \
         "EVENT_TYPE=${event}" \
         "TRIGGER_SOURCE=nmcli_monitor" \
@@ -116,6 +135,7 @@ trigger_instant_failover() {
             elif kill -USR1 "$failover_pid" 2>/dev/null; then
                 # Event 6: USR1 signal sent successfully
                 log_info_structured "USR1 signal sent to failover monitor" \
+                    "FAILOVER_EVENT_ID=${_event_id}" \
                     "SIGNAL=USR1" \
                     "TARGET_PID=${failover_pid}" \
                     "METHOD=pid_file" \
@@ -137,6 +157,7 @@ trigger_instant_failover() {
     if [[ $signaled -eq 1 ]]; then
         # Event 7: USR1 signal via pgrep fallback
         log_info_structured "USR1 signal sent via pgrep fallback" \
+            "FAILOVER_EVENT_ID=${_event_id}" \
             "SIGNAL=USR1" \
             "METHOD=pgrep" \
             "TARGET_SCRIPT=${FAILOVER_SCRIPT}" \
@@ -148,18 +169,23 @@ trigger_instant_failover() {
     log_warning "Haupt-Failover-Script nicht gefunden - führe Emergency Failover aus"
 
     if [[ "$interface" == "$PRIMARY_IFACE" ]]; then
-        # v3.6.0: Route Guardian Pause-Lockfile erstellen (konsistent mit routing.sh v3.4)
-        # Format: PID_TIMESTAMP (ermöglicht Stale-Erkennung und Ownership-Tracking)
-        local emergency_id
-        emergency_id="$$_$(date +%s)"
+        # Emergency path reuses the same failover Event-ID minted above — one
+        # failover == one ID across all paths. Lockfile content stays in the
+        # PID_TIMESTAMP format (route-guardian stale detection).
+        local emergency_id="${_event_id}"
         if ! echo "$emergency_id" > /run/failover-in-progress.lock 2>/dev/null; then
             log_warning "Failed to create Route Guardian pause lockfile - emergency failover may be reverted"
         else
+            # Persist for the metrics collector (pivot to the event-DB row).
+            if declare -F failover_event_id_publish >/dev/null 2>&1; then
+                failover_event_id_publish "$emergency_id"
+            fi
             log_info "Created Route Guardian pause lockfile: $emergency_id"
         fi
 
         # Event 8a: Emergency failover started
         log_warning_structured "Emergency failover execution started" \
+            "FAILOVER_EVENT_ID=${emergency_id}" \
             "FROM_INTERFACE=${interface}" \
             "TO_INTERFACE=${BACKUP_IFACE}" \
             "METHOD=emergency" \
@@ -188,6 +214,7 @@ trigger_instant_failover() {
         if [[ $emergency_route_ok -eq 1 ]]; then
             # Event 8b: Emergency failover success
             log_info_structured "Emergency failover completed successfully" \
+                "FAILOVER_EVENT_ID=${emergency_id}" \
                 "TO_INTERFACE=${BACKUP_IFACE}" \
                 "GATEWAY=${BACKUP_GATEWAY}" \
                 "METRIC=200" \
@@ -210,6 +237,7 @@ trigger_instant_failover() {
         else
             # Event 8c: Emergency failover failure - release lockfile immediately
             log_error_structured "Emergency failover failed" \
+                "FAILOVER_EVENT_ID=${emergency_id}" \
                 "TO_INTERFACE=${BACKUP_IFACE}" \
                 "GATEWAY=${BACKUP_GATEWAY}" \
                 "STATUS=failed" \

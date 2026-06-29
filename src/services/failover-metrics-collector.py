@@ -52,6 +52,12 @@ STATE_FILE = Path("/run/linux-dual-wan-failover/wan-state/active_wan")
 STATE_PERSISTENCE_FILE = Path(
     "/run/linux-dual-wan-failover/wan-state/metrics_collector_state"
 )
+# Failover Event-ID (Correlation-ID): published by routing.sh / nmcli-failover-
+# monitor at the moment of the route change. Stored on the failover_events row,
+# it links the DB/metric (symptom) to the service logs (cause) of the same
+# failover: grep FAILOVER_EVENT_ID=<id> /var/log/linux-dual-wan-failover/*.log.
+# See src/lib/event-id.sh.
+LAST_FAILOVER_ID_FILE = Path("/run/linux-dual-wan-failover/wan-state/last_failover_id")
 FAILOVER_LOG = Path("/var/log/linux-dual-wan-failover/failover-enhanced.log")
 
 # RRD Configuration
@@ -415,7 +421,8 @@ class FailoverMetricsCollector:
                 reason TEXT,
                 duration_seconds INTEGER,
                 actual_failover_duration_ms INTEGER,
-                inter_event_duration_seconds INTEGER
+                inter_event_duration_seconds INTEGER,
+                event_id TEXT
             )
         """)
 
@@ -437,6 +444,15 @@ class FailoverMetricsCollector:
                 ADD COLUMN inter_event_duration_seconds INTEGER
             """)
             logger.info("Added column: inter_event_duration_seconds (schema migration)")
+
+        if "event_id" not in columns:
+            cursor.execute("""
+                ALTER TABLE failover_events
+                ADD COLUMN event_id TEXT
+            """)
+            logger.info(
+                "Added column: event_id (schema migration, Failover Correlation-ID)"
+            )
 
         # Create index for faster queries
         cursor.execute("""
@@ -849,6 +865,26 @@ class FailoverMetricsCollector:
 
         return None
 
+    def _read_event_id(self) -> str | None:
+        """Read the failover Event-ID (Correlation-ID) of the current event.
+
+        routing.sh / nmcli-failover-monitor publish the active failover's ID to
+        LAST_FAILOVER_ID_FILE at the moment of the route change. Storing it on the
+        failover_events row lets the DB event (symptom) pivot to the service logs
+        (cause): grep FAILOVER_EVENT_ID=<id> /var/log/linux-dual-wan-failover/*.log.
+
+        Known limitation: with the 5s poll, two failovers inside one window can
+        share the most recent ID (accepted sampling trade-off — see event-id.sh).
+
+        Returns:
+            The event ID string, or None if the file is missing/unreadable/empty.
+        """
+        try:
+            event_id = LAST_FAILOVER_ID_FILE.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return event_id or None
+
     def record_failover_event(
         self,
         event_type: str,
@@ -890,6 +926,9 @@ class FailoverMetricsCollector:
             actual_duration_seconds = (
                 (actual_duration_ms // 1000) if actual_duration_ms else None
             )
+
+            # Failover Event-ID (Correlation-ID) for the DB-row → service-logs pivot
+            event_id = self._read_event_id()
 
             # Calculate inter-event duration (time between consecutive failover events)
             inter_event_seconds = None
@@ -950,8 +989,9 @@ class FailoverMetricsCollector:
                 (timestamp, event_type, from_interface, to_interface,
                  primary_score_before, backup_score_before,
                  primary_latency_before, backup_latency_before,
-                 reason, duration_seconds, actual_failover_duration_ms, inter_event_duration_seconds)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 reason, duration_seconds, actual_failover_duration_ms,
+                 inter_event_duration_seconds, event_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     datetime.now(),
@@ -969,6 +1009,7 @@ class FailoverMetricsCollector:
                     actual_duration_seconds,
                     actual_duration_ms,
                     inter_event_seconds,
+                    event_id,
                 ),
             )
 

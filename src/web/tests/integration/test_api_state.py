@@ -36,6 +36,56 @@ def test_history_returns_seeded_events(client, events_db):
     assert data["events"][0]["timestamp"].startswith(newest_day)
 
 
+def test_history_exposes_event_id(client, events_db):
+    """The failover Event-ID (Correlation-ID) reaches the /api/history response.
+
+    Fixture: two migrated events (event_id set) + one legacy event (NULL),
+    covering the mix in a real, partially-migrated database.
+    """
+    resp = client.get("/api/history?days=30")
+    data = resp.get_json()
+    assert {e["event_id"] for e in data["events"]} == {
+        None,
+        "111_1700000001",
+        "222_1700000002",
+    }
+    # Newest event (2d back) predates the Correlation-ID feature → event_id None
+    assert data["events"][0]["event_id"] is None
+
+
+def test_history_degrades_without_event_id_column(client, fixtures_dir):
+    """The reader stays functional against a DB WITHOUT the event_id column
+    (collector not yet upgraded) — event_id is synthesized as None instead of
+    raising OperationalError (which would empty the whole history)."""
+    import sqlite3
+
+    from web import config as cfg
+
+    conn = sqlite3.connect(cfg.EVENTS_DB)
+    conn.execute(
+        """
+        CREATE TABLE failover_events (
+            id INTEGER PRIMARY KEY, timestamp DATETIME NOT NULL, event_type TEXT,
+            from_interface TEXT, to_interface TEXT, primary_score_before INTEGER,
+            backup_score_before INTEGER, reason TEXT, duration_seconds INTEGER,
+            actual_failover_duration_ms INTEGER, inter_event_duration_seconds INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO failover_events (timestamp, event_type, from_interface, to_interface) "
+        "VALUES (datetime('now'), 'failover', 'eth0', 'lte0')"
+    )
+    conn.commit()
+    conn.close()
+
+    resp = client.get("/api/history?days=30")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["count"] == 1
+    assert data["events"][0]["event_id"] is None
+
+
 def test_history_invalid_days_falls_back_to_default(client, events_db):
     resp = client.get("/api/history?days=NaN")
     assert resp.status_code == 200

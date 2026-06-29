@@ -1,5 +1,8 @@
 # How-to: debug a failover (or a failover that didn't happen)
 
+> To reconstruct **one specific** failover across all four services by its
+> Correlation-ID, see [trace-failover.md](trace-failover.md).
+
 ## "It failed over and I don't know why"
 
 ```bash
@@ -7,8 +10,8 @@
 sudo journalctl -u failover-monitor --since '15 minutes ago' | grep -E 'Score|Failover|Failback'
 
 # Look at the metrics database (after-the-fact).
-sudo sqlite3 /var/lib/linux-dual-wan-failover/metrics/failover-events.db \
-    'SELECT timestamp, event_type, primary_score, backup_score, reason FROM events ORDER BY timestamp DESC LIMIT 20'
+sudo sqlite3 /var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db \
+    'SELECT timestamp, event_type, primary_score_before, backup_score_before, reason FROM failover_events ORDER BY timestamp DESC LIMIT 20'
 ```
 
 The most informative log lines:

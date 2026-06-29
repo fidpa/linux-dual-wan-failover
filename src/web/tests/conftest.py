@@ -121,7 +121,8 @@ def events_db(fixtures_dir: Path) -> Path:
             reason TEXT,
             duration_seconds INTEGER,
             actual_failover_duration_ms INTEGER,
-            inter_event_duration_seconds INTEGER
+            inter_event_duration_seconds INTEGER,
+            event_id TEXT
         )
         """
     )
@@ -130,16 +131,19 @@ def events_db(fixtures_dir: Path) -> Path:
         INSERT INTO failover_events
         (timestamp, event_type, from_interface, to_interface,
          primary_score_before, backup_score_before, reason,
-         duration_seconds, actual_failover_duration_ms, inter_event_duration_seconds)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         duration_seconds, actual_failover_duration_ms, inter_event_duration_seconds,
+         event_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             # Timestamps are relative to "now" so the seeded events always
             # fall inside the default days=30 query window (hardcoded dates
             # made the history test a time bomb).
-            (_ts_days_ago(13, "10:15:00"), "failover", "eth0", "lte0", 25, 80, "score_based", 7, 4500, 0),
-            (_ts_days_ago(13, "12:30:00"), "failback", "lte0", "eth0", 95, 70, "score_based", 5, 3200, 8100),
-            (_ts_days_ago(2, "22:21:00"), "failover", "eth0", "lte0", 5, 90, "primary_no_carrier", 6, 5200, 200_000),
+            # event_id (Correlation-ID, PID_TIMESTAMP): last row NULL covers the
+            # mix of migrated / pre-Correlation-ID events in one database.
+            (_ts_days_ago(13, "10:15:00"), "failover", "eth0", "lte0", 25, 80, "score_based", 7, 4500, 0, "111_1700000001"),
+            (_ts_days_ago(13, "12:30:00"), "failback", "lte0", "eth0", 95, 70, "score_based", 5, 3200, 8100, "222_1700000002"),
+            (_ts_days_ago(2, "22:21:00"), "failover", "eth0", "lte0", 5, 90, "primary_no_carrier", 6, 5200, 200_000, None),
         ],
     )
     conn.commit()

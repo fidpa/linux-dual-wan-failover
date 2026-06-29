@@ -133,17 +133,24 @@
     try { payload = JSON.parse(event.detail.xhr.responseText); } catch (e) { return; }
     if (!payload || !payload.events) return;
     if (!payload.events.length) {
-      body.innerHTML = '<tr><td colspan="4" class="muted">No events.</td></tr>';
+      body.innerHTML = '<tr><td colspan="5" class="muted">No events.</td></tr>';
       return;
     }
     const rows = payload.events.slice(0, 100).map((ev) => {
       const reason = ev.reason || '';
+      // Failover Event-ID (Correlation-ID): reconstruct this failover across all
+      // services. The title is a copy-ready grep command (logs live in files).
+      const eid = ev.event_id || '';
+      const traceCell = eid
+        ? `<td class="trace"><code title="grep FAILOVER_EVENT_ID=${escapeHtml(eid)} /var/log/linux-dual-wan-failover/*.log">${escapeHtml(eid)}</code></td>`
+        : '<td class="trace muted">–</td>';
       return `
         <tr>
           <td><time datetime="${escapeHtml(ev.timestamp || '')}">${escapeHtml(fmtTs(ev.timestamp))}</time></td>
           <td>${eventBadge(ev.event_type)}</td>
           <td>${escapeHtml(ev.from_interface || '–')} → ${escapeHtml(ev.to_interface || '–')}</td>
           <td class="reason" title="${escapeHtml(reason)}"><code>${escapeHtml(reason)}</code></td>
+          ${traceCell}
         </tr>
       `;
     });

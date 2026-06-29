@@ -64,7 +64,7 @@
         <summary id="history-heading">Event History (last 30 days)</summary>
         <table>
             <thead>
-                <tr><th scope="col">Time</th><th scope="col">Type</th><th scope="col">From &rarr; To</th><th scope="col">Reason</th></tr>
+                <tr><th scope="col">Time</th><th scope="col">Type</th><th scope="col">From &rarr; To</th><th scope="col">Reason</th><th scope="col">Trace</th></tr>
             </thead>
             <tbody id="history-body"
                    hx-get="/api/history?days=30"
@@ -72,7 +72,7 @@
                    hx-swap="innerHTML"
                    hx-on:htmx:after-request="renderHistory(event)"
                    aria-live="polite">
-                <tr><td colspan="4" class="muted">Loading&hellip;</td></tr>
+                <tr><td colspan="5" class="muted">Loading&hellip;</td></tr>
             </tbody>
         </table>
     </details>

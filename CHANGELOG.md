@@ -5,6 +5,42 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-06-29
+
+Failover **Correlation-ID** (Event-ID) tracing. Every failover now carries a
+single ID that travels through all four services and the metrics database, so a
+single event can be reconstructed end-to-end — the distributed-tracing idea
+applied to a four-service failover pipeline.
+
+### Added
+
+- **`src/lib/event-id.sh`** — mints/propagates/persists the failover Event-ID
+  (`PID_TIMESTAMP`, identical to the lockfile format). `nmcli-failover-monitor`
+  mints it at detection and writes `pending_failover_id` **before** the USR1
+  signal (signal-safe: no I/O in the receiver's trap); `failover-monitor` adopts
+  it in its main loop or mints fresh for health-check/failback/manual failovers;
+  `routing.sh` publishes `last_failover_id` for the collector.
+- **`src/tools/trace-failover.sh`** — operator CLI that reconstructs one failover
+  from its Event-ID: the event-DB row (symptom) plus a time-merged service-log
+  waterfall (cause). `--list`, `--last`, and a specific ID; device-agnostic paths
+  overridable via `LOG_DIR` / `STATE_DIR` / `EVENTS_DB`. Installed to
+  `${LIB_DIR}/tools/` by `install.sh`.
+- **`event_id` column** on `failover_events` (idempotent `ALTER TABLE` migration;
+  the web reader degrades gracefully to `NULL` against a not-yet-migrated DB).
+- Web-UI event history gains a **Trace** column exposing the Event-ID, with a
+  copy-ready `grep` command in the cell tooltip.
+- New how-to: [`docs/how-to/trace-failover.md`](docs/how-to/trace-failover.md);
+  new README "Key Concepts" section; CI lint coverage extended to `src/tools/`.
+
+### Changed
+
+- `nmcli-failover-monitor`, `failover-monitor`, `routing.sh` and `route-guardian`
+  stamp `FAILOVER_EVENT_ID=<id>` into their structured/file logs at the failover
+  lifecycle points (detection → orchestration → route change → guardian pause).
+- The lockfile content is now the failover Event-ID. The on-disk format is
+  unchanged (`PID_TIMESTAMP`), so `route-guardian`'s stale-detection still parses
+  it — fully backward compatible.
+
 ## [0.4.1] — 2026-06-12
 
 First live run of the v0.4.0 CI pipeline caught two runner-environment

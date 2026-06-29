@@ -1235,14 +1235,16 @@ _failover_lock_active() {
 
         if [[ $lock_age -gt 60 ]]; then
             # Stale lockfile detected (>60s old) - likely from crashed cleanup job
-            log_message "WARNING" "FAILOVER" "Stale lockfile detected (${lock_age}s old, content: $lockfile_content) - removing and resuming"
+            # lockfile_content IS the failover Event-ID → log it as a greppable
+            # field (the guardian "span" of the trace).
+            log_message "WARNING" "FAILOVER" "Stale lockfile detected (${lock_age}s old, content: $lockfile_content) - removing and resuming [FAILOVER_EVENT_ID=$lockfile_content]"
             send_alert "STALE_LOCKFILE" "⚠️ Stale failover lockfile removed" "Age: ${lock_age}s, Lockfile: $lockfile_content" &
             rm -f /run/failover-in-progress.lock 2>/dev/null || true
             return 1  # Continue with normal route checks after cleanup
         fi
 
         # Valid lockfile - pause route checks
-        log_message "INFO" "FAILOVER" "Failover in progress - skipping route checks (lockfile age: ${lock_age}s)"
+        log_message "INFO" "FAILOVER" "Failover in progress - skipping route checks (lockfile age: ${lock_age}s) [FAILOVER_EVENT_ID=$lockfile_content]"
         return 0
     fi
 

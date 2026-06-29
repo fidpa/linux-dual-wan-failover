@@ -63,10 +63,12 @@ require_root() {
 }
 
 install_libs() {
-    install -d -m 755 "${LIB_DIR}/lib" "${LIB_DIR}/services"
+    install -d -m 755 "${LIB_DIR}/lib" "${LIB_DIR}/services" "${LIB_DIR}/tools"
     install -m 644 "${REPO_ROOT}"/src/lib/*.sh "${LIB_DIR}/lib/"
     install -m 755 "${REPO_ROOT}"/src/services/*.sh "${LIB_DIR}/services/"
     install -m 755 "${REPO_ROOT}"/src/services/*.py "${LIB_DIR}/services/"
+    # Operator tools (e.g. trace-failover.sh): runnable from ${LIB_DIR}/tools/.
+    install -m 755 "${REPO_ROOT}"/src/tools/*.sh "${LIB_DIR}/tools/"
 }
 
 install_alerting_plugins() {
