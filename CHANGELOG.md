@@ -5,6 +5,28 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-07-16
+
+A field incident in the upstream deployment (a captured function's log line
+corrupting a sed expression during a real DSL outage) prompted an audit of the
+logging setup here — the code was clean, but the audit surfaced one latent
+ordering bug:
+
+### Fixed
+
+- **`src/lib/common.sh`** — the logging defaults (`LOG_FILE`, `LOG_TO_JOURNAL`,
+  `LOG_TO_STDOUT`) are now set **before** the toolkit's `logging.sh` is sourced.
+  The toolkit initializes these variables with `:=` at source time, so the
+  previous assignments after the `source` line were dead code — with the toolkit
+  installed, `LOG_TO_STDOUT` silently ran as `true` while the code claimed a
+  `false` default. The effective default is now an explicit, documented `true`:
+  the systemd units use `StandardOutput=journal`, and stdout is the only path
+  into the journal when the toolkit is loaded (the debug guide reads logs via
+  `journalctl -u failover-monitor`). No behavior change — this pins the
+  behavior the services have always relied on and keeps it stable against
+  future toolkit default changes. User overrides via environment/EnvironmentFile
+  are respected as before.
+
 ## [0.5.0] — 2026-06-29
 
 Failover **Correlation-ID** (Event-ID) tracing. Every failover now carries a
@@ -469,7 +491,13 @@ stack that has been running in production since 2025-08.
   `ping`.
 - **CI**: `shellcheck`, `bashate`, `bats`, `ruff`.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/fidpa/linux-dual-wan-failover/releases/tag/v0.1.0

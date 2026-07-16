@@ -35,6 +35,19 @@ if ! SCRIPT_DIR_COMMON="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" &
 fi
 readonly SCRIPT_DIR_COMMON
 
+# Logging defaults — MUST be set BEFORE sourcing the toolkit: its logging.sh
+# initializes these with `:=` at source time, so anything set afterwards is a
+# dead assignment. LOG_TO_STDOUT stays true because journald visibility relies
+# on it: the units run with StandardOutput=journal and docs/how-to/
+# debug-failover.md reads logs via `journalctl -u failover-monitor` — with the
+# toolkit loaded, stdout is the only path into the journal (LOG_TO_JOURNAL
+# stays false; the stderr fallback logger covers the no-toolkit case).
+# Note for callers: functions whose stdout is captured via `$(...)` must not
+# log without `>&2`, or the log line becomes part of the captured value.
+LOG_FILE="${LOG_FILE:-/var/log/linux-dual-wan-failover/failover.log}"
+LOG_TO_JOURNAL="${LOG_TO_JOURNAL:-false}"
+LOG_TO_STDOUT="${LOG_TO_STDOUT:-true}"
+
 # Resolve the toolkit library directory.
 # Order: TOOLKIT_LIB env > system path > vendor/ submodule > none.
 _resolve_toolkit_lib() {
@@ -68,10 +81,6 @@ if ! declare -F log_info &>/dev/null; then
     log_error()   { printf '%s [ERROR] %s\n'   "$(date -u +%FT%TZ)" "$*" >&2; }
     log_debug()   { [[ "${DEBUG:-0}" == 1 ]] && printf '%s [DEBUG] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 fi
-
-LOG_FILE="${LOG_FILE:-/var/log/linux-dual-wan-failover/failover.log}"
-LOG_TO_JOURNAL="${LOG_TO_JOURNAL:-false}"
-LOG_TO_STDOUT="${LOG_TO_STDOUT:-false}"
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
