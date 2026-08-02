@@ -53,6 +53,8 @@ readonly HTTP_TIMEOUT=5
 #    measure_http_time()        HTTP-Verbindungszeit in ms
 #    measure_dns_performance()  DNS-Performance-Messung (Alias für measure_dns_time)
 #    measure_http_performance() HTTP-Performance mit HTTP-Code-Validierung
+#    _pick_probe_target()       Erstes antwortendes Ziel aus CHECK_IPS (für WAN-Pfad-Messung)
+#    measure_path_quality()     Eine Ping-Serie → "avg|loss|mdev" (konsistente Stichprobe)
 #    test_wan_quality()         Composite WAN-Assessment → JSON (latency/loss/jitter/dns/http)
 #    measure_dns_detailed()     Multi-Resolver DNS-Analyse → JSON (Google/Cloudflare/ISP)
 #    test_bandwidth()           Bandwidth-Test via curl (kbps)
@@ -1060,15 +1062,101 @@ measure_http_performance() {
     fi
 }
 
+# ----------------------------------------------------------------------------
+# WAN path probing
+# ----------------------------------------------------------------------------
+# Pick the first CHECK_IP that answers on this interface.
+#
+# A single hardcoded target would skew the metric whenever that one provider
+# deprioritises ICMP, so we walk the list and take the first responder.
+#
+# Args:   $1 = interface
+# Echo:   IP of the first responding target, or "" when none answer
+# Return: 0 on success, 1 when no target answered
+_pick_probe_target() {
+    local interface="$1"
+    local targets=("${CHECK_IPS[@]:-${DEFAULT_CHECK_IPS[@]}}")
+
+    for target in "${targets[@]}"; do
+        if timeout "$PING_TIMEOUT" ping -c 1 -W 1 -I "$interface" "$target" &>/dev/null; then
+            echo "$target"
+            return 0
+        fi
+    done
+
+    echo ""
+    return 1
+}
+
+# Measure latency, packet loss and jitter from ONE ping series.
+#
+# The three values previously came from three separate series (5 + 10 + 10
+# sequential `ping -c 1`), so they described three different moments and could
+# contradict each other. A single series also bounds the worst case: 25 pings
+# with PING_TIMEOUT=2 can reach 50s, which exceeds the metrics collector's 30s
+# subprocess timeout and silently stalls wan_quality.prom.
+#
+# mdev from the ping summary is the standard deviation of the RTTs — the same
+# definition measure_jitter() computes by hand.
+#
+# Args:   $1 = interface, $2 = target, $3 = samples (default: 10)
+# Echo:   "avg|loss|mdev" — on failure "999.99|100|999.99"
+measure_path_quality() {
+    local interface="$1"
+    local target="$2"
+    local samples="${3:-${WAN_QUALITY_PROBE_SAMPLES:-10}}"
+
+    # Bound the whole series: samples * spacing + slack for the last reply.
+    local series_timeout
+    series_timeout=$((samples + PING_TIMEOUT * 2))
+
+    local ping_output
+    ping_output=$(timeout "$series_timeout" ping -c "$samples" -i 0.2 -W 1 \
+        -I "$interface" "$target" 2>/dev/null)
+
+    if [[ -z "$ping_output" ]]; then
+        echo "999.99|100|999.99"
+        return 1
+    fi
+
+    local loss
+    loss=$(awk -F', ' '/packet loss/ { gsub(/%.*/, "", $3); gsub(/ /, "", $3); print $3 }' \
+        <<< "$ping_output")
+    is_numeric "$loss" || loss=100
+
+    # 100% loss produces no rtt summary line — report sentinels, keep the loss.
+    local rtt_line
+    rtt_line=$(awk -F'= ' '/rtt |round-trip/ { print $2 }' <<< "$ping_output")
+
+    if [[ -z "$rtt_line" ]]; then
+        echo "999.99|${loss}|999.99"
+        return 1
+    fi
+
+    local avg mdev
+    avg=$(cut -d'/' -f2 <<< "$rtt_line")
+    mdev=$(cut -d'/' -f4 <<< "$rtt_line" | tr -d ' ms')
+
+    is_numeric "$avg" || avg="999.99"
+    is_numeric "$mdev" || mdev="999.99"
+
+    echo "${avg}|${loss}|${mdev}"
+}
+
 # Comprehensive WAN quality assessment with detailed metrics
 # Returns JSON-like output for easy parsing
+#
+# latency/loss/jitter describe the INTERNET path, not the LAN hop. The gateway
+# is still probed, but reported separately (gateway_latency_ms,
+# gateway_reachable) so "modem dead" stays distinguishable from "uplink bad".
+# WAN_QUALITY_TARGET_MODE=gateway restores the historical behaviour.
 test_wan_quality() {
     local interface="$1"
     local gateway
     gateway=$(get_gateway "$interface")
 
     if [[ -z "$gateway" ]]; then
-        log "WARNING" "No gateway for $interface - cannot test WAN quality"
+        log "WARNING" "No gateway for $interface - cannot test WAN quality" >&2
         # Return minimal JSON structure
         cat << EOF
 {
@@ -1076,6 +1164,8 @@ test_wan_quality() {
   "latency_ms": 999.99,
   "packet_loss_pct": 100,
   "jitter_ms": 999.99,
+  "gateway_latency_ms": 999.99,
+  "gateway_reachable": 0,
   "dns_time_ms": 999,
   "http_time_ms": 999,
   "overall_score": 0,
@@ -1085,15 +1175,36 @@ EOF
         return 1
     fi
 
-    log "DEBUG" "Testing WAN quality for $interface (gateway: $gateway)"
+    # Gateway stays a separate signal: it separates "modem/router dead" from
+    # "uplink degraded". A short series is enough — this hop is a LAN cable.
+    local gateway_latency="999.99"
+    local gateway_reachable=0
+    local gw_probe
+    gw_probe=$(measure_path_quality "$interface" "$gateway" 3)
+    if [[ "$gw_probe" != 999.99* ]]; then
+        gateway_latency="${gw_probe%%|*}"
+        gateway_reachable=1
+    fi
 
-    # Measure all quality metrics
-    local latency
-    latency=$(measure_latency "$interface" "$gateway" 5)
-    local packet_loss
-    packet_loss=$(measure_packet_loss "$interface" "$gateway" 10)
-    local jitter
-    jitter=$(measure_jitter "$interface" "$gateway" 10)
+    # Pick where latency/loss/jitter are measured.
+    local probe_target
+    if [[ "${WAN_QUALITY_TARGET_MODE:-internet}" == "gateway" ]]; then
+        probe_target="$gateway"   # historical behaviour (soft rollback)
+    else
+        probe_target=$(_pick_probe_target "$interface")
+    fi
+
+    local latency packet_loss jitter
+    if [[ -z "$probe_target" ]]; then
+        log "WARNING" "No reachable probe target on $interface - WAN path unmeasurable" >&2
+        latency="999.99"; packet_loss=100; jitter="999.99"
+    else
+        log "DEBUG" "Testing WAN quality for $interface (probe: $probe_target, gateway: $gateway)" >&2
+        local path_quality
+        path_quality=$(measure_path_quality "$interface" "$probe_target")
+        IFS='|' read -r latency packet_loss jitter <<< "$path_quality"
+    fi
+
     local dns_time
     dns_time=$(measure_dns_performance "$interface" "8.8.8.8" "google.com")
     local http_time
@@ -1151,12 +1262,13 @@ EOF
     local overall_score
     overall_score=$(echo "scale=0; ($latency_score * 25 + $loss_score * 25 + $jitter_score * 15 + $dns_score * 20 + $http_score * 15) / 100" | bc -l)
 
-    log "INFO" "WAN quality for $interface: latency=${latency}ms, loss=${packet_loss}%, jitter=${jitter}ms, dns=${dns_time}ms, http=${http_time}ms, score=${overall_score}"
+    log "INFO" "WAN quality for $interface: probe=${probe_target:-none} latency=${latency}ms, loss=${packet_loss}%, jitter=${jitter}ms, gw=${gateway_latency}ms, dns=${dns_time}ms, http=${http_time}ms, score=${overall_score}" >&2
 
     # Ensure numeric values are properly formatted for JSON (no leading dots)
     # bc sometimes returns ".14" instead of "0.14" which is invalid JSON
     [[ "$latency" == .* ]] && latency="0$latency"
     [[ "$jitter" == .* ]] && jitter="0$jitter"
+    [[ "$gateway_latency" == .* ]] && gateway_latency="0$gateway_latency"
 
     # Return JSON structure for easy parsing by Python
     cat << EOF
@@ -1165,6 +1277,8 @@ EOF
   "latency_ms": $latency,
   "packet_loss_pct": $packet_loss,
   "jitter_ms": $jitter,
+  "gateway_latency_ms": $gateway_latency,
+  "gateway_reachable": $gateway_reachable,
   "dns_time_ms": $dns_time,
   "http_time_ms": $http_time,
   "overall_score": $overall_score,
@@ -1303,3 +1417,4 @@ export -f measure_latency measure_packet_loss compare_interfaces
 export -f get_gateway get_interface_ip test_bandwidth
 export -f measure_jitter measure_dns_performance measure_http_performance test_wan_quality
 export -f measure_dns_detailed measure_dns_doh
+export -f _pick_probe_target measure_path_quality

@@ -10,13 +10,26 @@ For each interface (independently, every `CHECK_INTERVAL`):
 | Test | Implementation | Default weight |
 |------|----------------|----------------|
 | Connectivity | `ping` against each `CHECK_IPS` target, bound to `<iface>` | 0–25 |
-| DNS | `dig` against each `DNS_SERVERS` resolver, bound to the interface IP | 0 or 25 |
+| DNS | DNS-over-HTTPS via `curl --interface <iface>` | 0 or 25 |
 | Gateway | `ping` to the auto-detected gateway for `<iface>` | 0 or 25 |
 | HTTP | `curl --interface <iface>` against a known-good HTTP target | 0 or 25 |
 
 Connectivity is **proportional** — the score scales with how many `CHECK_IPS`
 targets answered. The other three tests are **binary**: the first successful
 probe earns the full 25 points; total failure earns 0. Sum: 0–100.
+
+> **On the DNS row**: the test binds with `curl --interface`, which is a real
+> `SO_BINDTODEVICE` binding. An earlier implementation used `dig -b`, which only
+> sets the *source address* — packets still left via the active default route, so
+> the backup interface reported "DNS OK" even when it was unusable. If you
+> reimplement this test, keep the device binding.
+
+> **On the Gateway row**: this probe is deliberately a reachability check, not a
+> quality one. The gateway is one LAN hop away and answers in about a
+> millisecond regardless of uplink health, so it can only tell you "the modem or
+> router is gone". Link quality comes from the connectivity, DNS and HTTP rows —
+> and, for the graphs, from `wan_quality.prom` (see
+> [metrics.md](metrics.md)).
 
 ## Modifiers
 
@@ -40,10 +53,15 @@ acceptable" DSL purely on the latency component.
 
 ### E2E penalty
 
-If `wan_quality.prom` (an external Prometheus textfile updated by your
-own monitoring) reports DNS or HTTP times above the latency thresholds,
+If `wan_quality.prom` reports DNS or HTTP times above the latency thresholds,
 a penalty is subtracted. This reflects "the link is up but everything
 on top of it is slow" cases that the binary tests miss.
+
+That file is written by `failover-metrics-collector`, which ships with this
+repo — it is not something you have to supply. If the service is not running,
+the file goes stale and the penalty is skipped after
+`WAN_QUALITY_PROM_MAX_AGE` seconds (fail-safe: no penalty rather than a
+penalty based on old data).
 
 ### Backup-link quota cap
 

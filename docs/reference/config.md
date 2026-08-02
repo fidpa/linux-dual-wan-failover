@@ -15,6 +15,7 @@ high-level index.
 | Routing metrics | `PRIMARY_METRIC_NORMAL`, `PRIMARY_METRIC_DEMOTED`, `BACKUP_METRIC` | no (sane defaults) |
 | Gateways | `PRIMARY_GATEWAY`, `BACKUP_GATEWAY` | no (auto-detected) |
 | Health checks | `CHECK_IPS`, `DNS_SERVERS`, `DNS_TEST_DOMAINS` | no (sane defaults) |
+| WAN quality probe | `WAN_QUALITY_TARGET_MODE`, `WAN_QUALITY_PROBE_SAMPLES` | no (default: `internet`, 10 samples) |
 | Timing | `CHECK_INTERVAL`, `ROUTE_GUARDIAN_CHECK_INTERVAL` | no (sane defaults) |
 | Hysteresis | `FAILOVER_THRESHOLD_DOWN`, `FAILURE_THRESHOLD`, `RECOVERY_THRESHOLD`, `EMERGENCY_THRESHOLD` | no (sane defaults) |
 | Cooldowns | `ANTI_FLAPPING_DELAY`, `EMERGENCY_FAILBACK_COOLDOWN` | no (sane defaults) |
@@ -48,6 +49,24 @@ Most operators only ever touch these. Everything else has working defaults for t
 
 For alerting and quota, set `ALERTING_BACKEND` and `QUOTA_PROVIDER` — see their
 respective how-to guides.
+
+## Note on `WAN_QUALITY_TARGET_MODE`
+
+Leave this at `internet` unless you are debugging. The `gateway` setting exists
+only as a rollback switch to the historical behaviour, where latency, loss and
+jitter were measured against the interface's own gateway.
+
+That measurement is misleading on purpose-built dual-WAN boxes: the gateway is
+one LAN hop away, so it answers in about a millisecond with zero loss whatever
+the uplink is doing. The backup interface is hit hardest — it looks healthy for
+as long as it sits idle, and the true state only surfaces after a failover has
+already happened. The gateway is still probed and exported separately as
+`wan_gateway_latency_milliseconds` / `wan_gateway_reachable`, so nothing is lost
+by measuring the real path.
+
+Switching modes produces a step change in any historical Prometheus series for
+`wan_latency_milliseconds`, `wan_packet_loss_percent` and
+`wan_jitter_milliseconds`. Annotate the switchover in your dashboards.
 
 ## Note on the emergency-failback variables
 

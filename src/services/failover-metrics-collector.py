@@ -483,9 +483,31 @@ class FailoverMetricsCollector:
                 jitter_ms REAL,
                 dns_time_ms INTEGER,
                 http_time_ms INTEGER,
-                overall_score INTEGER
+                overall_score INTEGER,
+                gateway_latency_ms REAL,
+                gateway_reachable INTEGER
             )
         """)
+
+        # Schema migration for existing databases: latency_ms/packet_loss_pct/
+        # jitter_ms now describe the internet path; the former gateway
+        # measurement moved into these two columns.
+        cursor.execute("PRAGMA table_info(wan_quality_metrics)")
+        quality_columns = {row[1] for row in cursor.fetchall()}
+
+        if "gateway_latency_ms" not in quality_columns:
+            cursor.execute("""
+                ALTER TABLE wan_quality_metrics
+                ADD COLUMN gateway_latency_ms REAL
+            """)
+            logger.info("Added column: gateway_latency_ms (schema migration)")
+
+        if "gateway_reachable" not in quality_columns:
+            cursor.execute("""
+                ALTER TABLE wan_quality_metrics
+                ADD COLUMN gateway_reachable INTEGER
+            """)
+            logger.info("Added column: gateway_reachable (schema migration)")
 
         # DNS Performance Metrics table (Task 2.3)
         cursor.execute("""
@@ -1202,8 +1224,12 @@ class FailoverMetricsCollector:
 
         for interface in (PRIMARY_IFACE, BACKUP_IFACE):
             try:
+                # The operator config must be sourced here too: test_wan_quality()
+                # reads WAN_QUALITY_TARGET_MODE and CHECK_IPS from it. Without
+                # this the rollback switch would silently not reach the subprocess.
                 bash_cmd = (
                     f'source "{common_sh}" && '
+                    f'if [ -f "{CONFIG_FILE}" ]; then source "{CONFIG_FILE}"; fi && '
                     f'source "{network_sh}" && '
                     f'test_wan_quality "{interface}"'
                 )
@@ -1280,8 +1306,9 @@ class FailoverMetricsCollector:
                     """
                     INSERT INTO wan_quality_metrics
                     (timestamp, interface, latency_ms, packet_loss_pct, jitter_ms,
-                     dns_time_ms, http_time_ms, overall_score)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     dns_time_ms, http_time_ms, overall_score,
+                     gateway_latency_ms, gateway_reachable)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         datetime.now(),
@@ -1292,6 +1319,8 @@ class FailoverMetricsCollector:
                         data.get("dns_time_ms"),
                         data.get("http_time_ms"),
                         data.get("overall_score"),
+                        data.get("gateway_latency_ms"),
+                        data.get("gateway_reachable"),
                     ),
                 )
 
@@ -1370,6 +1399,30 @@ class FailoverMetricsCollector:
                     jitter = data.get("jitter_ms", 999.99)
                     f.write(
                         f'wan_jitter_milliseconds{{interface="{interface}"}} {jitter}\n'
+                    )
+                f.write("\n")
+
+                # Gateway (next LAN hop) — reported separately so "modem/router
+                # dead" stays distinguishable from "uplink degraded".
+                f.write(
+                    "# HELP wan_gateway_latency_milliseconds Latency to the next LAN hop (gateway)\n"
+                )
+                f.write("# TYPE wan_gateway_latency_milliseconds gauge\n")
+                for interface, data in quality_data.items():
+                    gw_latency = data.get("gateway_latency_ms", 999.99)
+                    f.write(
+                        f'wan_gateway_latency_milliseconds{{interface="{interface}"}} {gw_latency}\n'
+                    )
+                f.write("\n")
+
+                f.write(
+                    "# HELP wan_gateway_reachable Gateway reachable via ICMP (1=yes, 0=no)\n"
+                )
+                f.write("# TYPE wan_gateway_reachable gauge\n")
+                for interface, data in quality_data.items():
+                    gw_reachable = data.get("gateway_reachable", 0)
+                    f.write(
+                        f'wan_gateway_reachable{{interface="{interface}"}} {gw_reachable}\n'
                     )
                 f.write("\n")
 

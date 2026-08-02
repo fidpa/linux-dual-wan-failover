@@ -59,6 +59,23 @@ BACKUP_GATEWAY=
 # with diverse anycast / network operators.
 CHECK_IPS=("8.8.8.8" "1.1.1.1" "9.9.9.9" "208.67.222.222")
 
+# Where test_wan_quality() measures latency, packet loss and jitter:
+#   internet — first responding CHECK_IPS entry (the path users traverse)
+#   gateway  — the next LAN hop; historical behaviour, kept as a rollback switch
+#
+# Measuring against the gateway makes any link look perfect: that hop is a LAN
+# cable, so latency sits near 1ms and loss at 0% no matter how bad the uplink
+# is. On a dual-WAN box this is worst on the *backup* link — it scores high
+# while idle and only reveals itself once it is promoted to active WAN.
+# The gateway is still measured and exported as wan_gateway_latency_milliseconds
+# / wan_gateway_reachable, which keeps "modem dead" distinguishable from
+# "uplink degraded".
+WAN_QUALITY_TARGET_MODE=internet
+
+# ICMP samples per measurement series. Latency, loss and jitter all come from
+# this single series, so they describe the same moment.
+WAN_QUALITY_PROBE_SAMPLES=10
+
 # DNS servers used for the DNS test (independent of `/etc/resolv.conf`).
 DNS_SERVERS=("8.8.8.8" "1.1.1.1")
 

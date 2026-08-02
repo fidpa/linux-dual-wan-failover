@@ -5,6 +5,93 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-08-02
+
+WAN quality was measured against the wrong endpoint. `test_wan_quality()` probed
+`get_gateway "$interface"` — one LAN hop — so latency, packet loss and jitter
+described an Ethernet cable rather than the uplink. In the upstream deployment
+this read 1.32 ms / 0 % / 0.54 ms for the LTE backup and 0.23 ms / 0 % / 0 ms for
+the DSL primary, while the same backup link was timing out 5.7 % of its
+DNS probes and showing a p95 of 973 ms.
+
+Because latency (25 %), loss (25 %) and jitter (15 %) together make up 65 % of
+the composite score, the backup interface scored 90–100 whenever it was idle and
+only collapsed after a failover had already put traffic on it.
+
+### Changed
+
+- **`test_wan_quality()` measures the internet path.** Latency, packet loss and
+  jitter now probe the first responding `CHECK_IPS` entry instead of the
+  interface gateway. New `WAN_QUALITY_TARGET_MODE=internet|gateway` restores the
+  old behaviour as a rollback switch.
+- **One ping series instead of three.** `measure_path_quality()` derives
+  latency, loss and jitter (`mdev`) from a single `ping` run. Previously three
+  separate series (5 + 10 + 10 sequential `ping -c 1`) described three different
+  moments; the worst case of 25 × `PING_TIMEOUT` could also exceed the metrics
+  collector's 30 s subprocess timeout, silently stalling `wan_quality.prom`.
+- **The metrics collector sources the operator config.** Its `test_wan_quality()`
+  subprocess previously sourced only `common.sh` and `network.sh`, so
+  `WAN_QUALITY_TARGET_MODE` and `CHECK_IPS` never reached it — the rollback
+  switch would have had no effect.
+
+### Fixed
+
+- **`test_wan_quality()` polluted its own stdout.** All four of its `log` calls
+  wrote to stdout, but the function's stdout is parsed by the metrics collector
+  with `json.loads()` — the log line landed in the payload and raised
+  `JSONDecodeError: Extra data`, silently taking down WAN quality collection
+  wherever `LOG_TO_STDOUT` was active (its default). `common.sh` states the rule
+  explicitly: *"functions whose stdout is captured via `$(...)` must not log
+  without `>&2`"*. All four calls now redirect to stderr. Covered by a
+  regression test asserting the payload starts with `{` and carries no log
+  markers.
+
+#### Documentation corrected against the code
+
+An audit of the reference docs turned up five claims that did not match the
+implementation. All predate this release:
+
+- **`metrics.md` documented a metric namespace that was never implemented.** The
+  entire textfile table listed seven `linux_dual_wan_failover_*` metrics — none
+  of them exist in the collector. Replaced with the twelve metrics actually
+  emitted, grouped by the file each is written to, labels verified against the
+  source.
+- **`metrics.md` claimed a single `.prom` file.** The collector writes three:
+  `wan_quality.prom`, `failover_duration.prom` and `dns_performance.prom`.
+- **The suggested alert rules could never have fired** — all three were written
+  against the non-existent metric names. Rewritten against the real ones, plus a
+  rule for the "gateway reachable but path degraded" case this release makes
+  visible.
+- **`scoring.md` described the DNS test as `dig` bound to the interface IP.** It
+  uses DNS-over-HTTPS via `curl --interface`; `dig -b` only sets the source
+  address, which is precisely the false-positive the DoH migration fixed. Noted
+  inline so the trap is not reintroduced.
+- **`scoring.md` called `wan_quality.prom` an external file "updated by your own
+  monitoring".** It is written by `failover-metrics-collector`, which ships with
+  this repo.
+
+### Added
+
+- `wan_gateway_latency_milliseconds` and `wan_gateway_reachable` Prometheus
+  gauges. The gateway probe is kept, just reported separately, so "modem or
+  router dead" stays distinguishable from "uplink degraded".
+- `gateway_latency_ms` / `gateway_reachable` columns in `wan_quality_metrics`
+  (additive `ALTER TABLE` migration; existing rows stay `NULL`).
+- `WAN_QUALITY_PROBE_SAMPLES` (default 10).
+- `tests/unit/test_wan_quality.bats` — 13 tests covering summary parsing, the
+  total-loss case where `ping` emits no `rtt` line, probe-target fallback, the
+  JSON contract consumed by the collector, stdout purity, and the rollback
+  switch.
+- WAN quality metrics documented in `docs/reference/metrics.md`; they were
+  previously undocumented.
+
+### Upgrade notes
+
+`wan_latency_milliseconds`, `wan_packet_loss_percent` and
+`wan_jitter_milliseconds` change meaning. Expect a step change in historical
+series at the upgrade point and annotate your dashboards. Any alert rule
+thresholded against LAN-hop values (single-digit milliseconds) needs revisiting.
+
 ## [0.6.0] — 2026-08-02
 
 A flapping primary link in the upstream deployment (repeated WAN-session loss

@@ -1,21 +1,63 @@
 # Prometheus metrics
 
-`failover-metrics-collector` writes a Prometheus textfile to
-`/var/lib/node_exporter/textfile_collector/linux-dual-wan-failover.prom`
-(or wherever you configure it). It also maintains a SQLite event history
-for after-the-fact analysis.
+`failover-metrics-collector` writes **three** Prometheus textfiles into the
+node_exporter textfile directory (`/var/lib/node_exporter/textfile_collector/`
+by default, `PROM_TEXTFILE_DIR` to change it). It also maintains a SQLite event
+history for after-the-fact analysis.
+
+| File | Written by | Contents |
+|------|-----------|----------|
+| `wan_quality.prom` | `test_wan_quality()` in `src/lib/network.sh` | Per-interface link quality |
+| `failover_duration.prom` | failover-event detection | How long failovers took |
+| `dns_performance.prom` | `measure_dns_detailed()` | Per-resolver DNS behaviour |
 
 ## Textfile metrics
 
+### Failover events (`failover_duration.prom`)
+
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `linux_dual_wan_failover_score` | gauge | `interface` | Current 0–100 score per interface. |
-| `linux_dual_wan_failover_active` | gauge | `interface` | 1 if the interface is the active default route, 0 otherwise. |
-| `linux_dual_wan_failover_failover_total` | counter | `from`, `to`, `reason` | Total failovers since start. `reason` is one of `score`, `event`, `emergency`, `last-resort`. |
-| `linux_dual_wan_failover_failback_total` | counter | `from`, `to` | Total failbacks. |
-| `linux_dual_wan_failover_quota_limit_pct` | gauge | (none) | Latest reported quota usage (0–100, or NaN if no provider). |
-| `linux_dual_wan_failover_route_cleanup_total` | counter | `interface` | Duplicate routes the guardian deleted. |
-| `linux_dual_wan_failover_lockfile_stale_total` | counter | (none) | Stale lockfiles cleaned up. |
+| `failover_actual_duration_milliseconds` | gauge | `event_type` | Actual failover execution time, measured in Bash. |
+| `failover_actual_duration_seconds` | gauge | `event_type` | Same value in seconds. |
+| `failover_inter_event_seconds` | gauge | `event_type` | Time between consecutive failover events — low values mean flapping. |
+| `failover_last_duration_seconds` | gauge | (none) | Last failover duration of any type. Legacy, kept for existing dashboards. |
+
+### DNS performance (`dns_performance.prom`)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `dns_success_rate_percent` | gauge | `interface` | Share of successful DNS queries. |
+| `dns_failures_total` | counter | `interface`, `type` | Failures split by `timeout` and `servfail`. |
+| `dns_quality_score` | gauge | `interface` | DNS-specific 0–100 score. |
+| `dns_resolver_time_milliseconds` | gauge | `interface` | Resolution time per resolver. |
+
+### WAN quality (`wan_quality.prom`)
+
+Written from `test_wan_quality()` in `src/lib/network.sh`.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `wan_latency_milliseconds` | gauge | `interface`, `type` | Average RTT to the probe target. |
+| `wan_packet_loss_percent` | gauge | `interface` | Packet loss to the probe target. |
+| `wan_jitter_milliseconds` | gauge | `interface` | RTT standard deviation (`mdev`) to the probe target. |
+| `wan_gateway_latency_milliseconds` | gauge | `interface` | RTT to the next LAN hop (the interface's gateway). |
+| `wan_gateway_reachable` | gauge | `interface` | 1 if the gateway answers ICMP, 0 otherwise. |
+| `wan_dns_time_milliseconds` | gauge | `interface` | DNS-over-HTTPS resolution time. 999 means timeout. |
+| `wan_http_time_milliseconds` | gauge | `interface` | HTTP connectivity-check time. 999 means failure. |
+| `wan_quality_score` | gauge | `interface` | Weighted 0–100 composite of the five metrics above. |
+
+**Probe target vs. gateway.** The first three metrics measure the *internet*
+path — the first `CHECK_IPS` entry that answers. The gateway is measured
+separately because the two answer different questions: a dead gateway means the
+modem or router is gone, while a healthy gateway paired with bad path metrics
+means the uplink itself is degraded.
+
+This distinction matters most on the backup interface. Measuring latency against
+the gateway means measuring a LAN cable — it reports roughly 1 ms and 0 % loss
+regardless of the uplink's true state, so an idle backup link scores high right
+up to the moment it is promoted to active WAN. Set
+`WAN_QUALITY_TARGET_MODE=gateway` to restore the old behaviour; expect a step
+change in historical series when switching either way.
 
 ## Recording rules and alerts
 
@@ -26,23 +68,35 @@ groups:
 - name: linux-dual-wan-failover
   rules:
   - alert: FailoverFlapping
-    expr: rate(linux_dual_wan_failover_failover_total[15m]) > 4
+    # Short gaps between consecutive failovers are the flapping signature.
+    expr: failover_inter_event_seconds < 900
     for: 1m
     annotations:
-      summary: "Failover stack is flapping (>4 failovers in 15min)"
-
-  - alert: BackupLinkQuotaCritical
-    expr: linux_dual_wan_failover_quota_limit_pct >= 96
-    for: 5m
-    annotations:
-      summary: "Backup-link quota at {{ $value }}% — failover effectively blocked"
+      summary: "Failovers less than 15min apart — link is flapping"
 
   - alert: BothLinksDegraded
-    expr: linux_dual_wan_failover_score < 50 unless on() linux_dual_wan_failover_score >= 60
+    expr: max(wan_quality_score) < 50
     for: 2m
     annotations:
-      summary: "Both WAN interfaces scoring below 50"
+      summary: "No WAN interface scores above 50"
+
+  - alert: UplinkDegradedButGatewayFine
+    # The case the gateway probe alone cannot see: LAN hop healthy, path bad.
+    expr: wan_gateway_reachable == 1 and wan_dns_time_milliseconds > 800
+    for: 5m
+    annotations:
+      summary: "{{ $labels.interface }}: gateway reachable but DNS above 800ms"
+
+  - alert: WanQualityStale
+    expr: time() - timestamp(wan_quality_score) > 300
+    for: 5m
+    annotations:
+      summary: "wan_quality.prom has not been updated for 5min"
 ```
+
+> These reference the metric names the collector actually emits. Until v0.7.0
+> this section listed a `linux_dual_wan_failover_*` namespace that was never
+> implemented — those rules could not have fired.
 
 ## SQLite event log
 
