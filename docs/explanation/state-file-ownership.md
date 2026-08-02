@@ -27,9 +27,37 @@ discipline that doesn't require any locking on the read side.
 | `/run/linux-dual-wan-failover/wan-state/connection_metrics` | `failover-monitor` (every 5 s) | `failover-metrics-collector` |
 | `/run/linux-dual-wan-failover/wan-state/pending_failover_id` | `nmcli-failover-monitor` (before USR1) | `failover-monitor` (consumes it) |
 | `/run/linux-dual-wan-failover/wan-state/last_failover_id` | `routing.sh` / `nmcli-failover-monitor` (== lockfile ID) | `failover-metrics-collector` |
+| `/run/linux-dual-wan-failover/wan-state/last_failover` | `failover-monitor` (after each route change) | `failover-web` (anti-flapping pre-check) |
+| `/run/linux-dual-wan-failover/wan-state/last_failover_to_backup` | `failover-monitor` (on failover to backup; reseeded at startup if missing while on backup) | `failover-monitor` (`MIN_BACKUP_TIME`, emergency-failback gate, prolonged-backup alert) |
 | `/var/lib/linux-dual-wan-failover/quota-snapshot.json` | quota-provider plugin | `failover-monitor` |
 | `/var/lib/linux-dual-wan-failover/route-guardian/state.json` | `route-guardian` | route-guardian (only) |
 | `/var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db` | `failover-metrics-collector` | metrics-collector (only) |
+
+## These files do not survive a service restart
+
+`RuntimeDirectory=` in the systemd units has no `RuntimeDirectoryPreserve=`,
+so systemd removes `/run/linux-dual-wan-failover/` — including all of
+`wan-state/` — every time a service stops. That is deliberate (no stale
+state after a crash), but it makes one class of bug easy to write:
+
+> A reader that defaults a missing timestamp to `0` does not get
+> "no information". It gets **1 January 1970**, and every
+> `now - timestamp >= threshold` check it feeds passes immediately.
+
+That is how `MIN_BACKUP_TIME` and the emergency-failback minimum silently
+stopped applying after any restart while on backup, and how the
+prolonged-backup alert came to announce ~496 000 hours on the backup link.
+Two rules follow:
+
+1. **A missing timestamp is a distinct case**, not a small number. Either
+   refuse to act (the emergency path does this) or re-establish a defensible
+   value (`failover-monitor` reseeds `last_failover_to_backup` with the
+   restart instant when it comes up on backup — the window restarts rather
+   than vanishing).
+2. **In-memory counters are wiped at the same moment.** `last_failover_mono`
+   resets to `0` on every daemon start, so any "time since last failover"
+   arithmetic needs the same explicit "never happened" branch — see
+   [anti-flapping.md](anti-flapping.md).
 
 ## Atomic-write pattern
 

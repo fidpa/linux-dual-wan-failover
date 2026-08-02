@@ -160,9 +160,31 @@ Response (success): HTTP 202.
 ```
 
 Rate-limit: 1 / 60 s per source-IP.
+Response (anti-flapping cooldown active): HTTP 409.
+
+```json
+{
+  "status": "cooldown",
+  "detail": "Anti-flapping cooldown active — 344s remaining. The daemon would discard this request.",
+  "remaining_seconds": 344
+}
+```
+
+The daemon enforces `ANTI_FLAPPING_DELAY` on manual actions too, and a
+suppressed request is dropped with a journal line only. Without this
+pre-check the API answered 202 "submitted" for a request that was
+guaranteed to be discarded, which reads to the operator as a dead button.
+The check is advisory — the daemon remains authoritative — and fails open
+if the timestamp is missing or unreadable.
+
 Audit event: `failback_submitted` (success), `failback_rejected` /
-`failback_noop` / `failback_failed` (otherwise).
+`failback_noop` / `failback_cooldown` / `failback_failed` (otherwise).
 Alert: `WARN_FAILOVER`.
+
+> Clients must render the response body on non-2xx as well. `403` (CSRF
+> token expired), `409` (noop/cooldown) and `429` (rate limit) all carry a
+> `detail` field; htmx only swaps 2xx bodies by default, so an
+> `htmx:responseError`-style handler is required or the UI shows nothing.
 
 ### `POST /api/force-failover`
 
@@ -272,7 +294,7 @@ env to `0` only in tests / dev.
 | 207 | Partial success (mutation persisted, side-effect failed). |
 | 400 | Empty/malformed body. |
 | 403 | CSRF / Origin / Referer rejected. |
-| 409 | State precondition not met (e.g. failback while on primary). |
+| 409 | State precondition not met (failback while on primary, or anti-flapping cooldown still running — `status` distinguishes `noop` from `cooldown`). |
 | 422 | Validation failed (range, type, unknown field). |
 | 429 | Rate-limit or SSE per-IP cap hit. |
 | 500 | Internal error during write/install. |

@@ -83,6 +83,12 @@ STAGING_CONFIG_PATH: Path = Path(
         "/var/lib/failover-web/staging/failover.conf",
     )
 )
+# Wall-clock unix timestamp of the last failover, written by the daemon
+# (world-readable). Basis for the anti-flapping pre-check in app.py.
+LAST_FAILOVER_FILE: Path = Path(
+    os.environ.get("FAILOVER_WEB_LAST_FAILOVER_FILE", str(STATE_DIR / "last_failover"))
+)
+
 MANUAL_ACTION_FILE: Path = Path(
     os.environ.get(
         "FAILOVER_WEB_MANUAL_ACTION_FILE",

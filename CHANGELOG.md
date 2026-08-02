@@ -5,6 +5,74 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-08-02
+
+A flapping primary link in the upstream deployment (repeated WAN-session loss
+with layer 1 intact) exposed the emergency-failback path as too eager, and a
+manual failback that "did nothing" turned out to be three separate defects
+stacked on top of each other. Measurements behind the recalibration: the backup
+uplink was not throttled (0.7 % of quota used, 27 Mbit/s down) — its 2.4 Mbit/s
+**uplink** saturated under load, and only the uplink direction moved DNS
+latency at all (idle 164–244 ms, downlink-saturated 182–252 ms,
+uplink-saturated 321–1231 ms).
+
+### Changed
+
+- **Emergency-failback defaults recalibrated.** `EMERGENCY_FAILBACK_MIN_BACKUP_TIME`
+  600 → 1800 s, `EMERGENCY_FAILBACK_DEGRADED_CHECKS` 6 → 20,
+  `EMERGENCY_FAILBACK_COOLDOWN` 900 → 3600 s. With the old values every cycle on
+  a flapping primary ended exactly at the 600 s floor — the escape hatch had
+  become the normal failback path, returning traffic to a link that was still
+  broken. The original "backup is up but end-to-end dead" case stays covered:
+  that degradation ran for over 90 minutes continuously.
+- **`EMERGENCY_FAILBACK_DEGRADED_CHECKS` semantics documented.** The counter
+  ticks per `CHECK_INTERVAL`, but reads a value refreshed on the collector's
+  slower cycle. The old default of 6 checks (nominally 90 s) covered fewer than
+  two independent samples in practice.
+
+### Fixed
+
+- **`ANTI_FLAPPING_DELAY` now actually applies to manual actions.** The shipped
+  config has always documented the cooldown as covering "failback + manual
+  actions", but the code matched only `reason == "failback"` —
+  `manual_failback` and `manual_failover_force` bypassed it entirely.
+- **Anti-flapping no longer suppresses everything for the first 10 minutes
+  after a reboot.** `last_failover_mono` is zero-initialised and
+  `get_monotonic_time()` reads `/proc/uptime`, so the daemon computed
+  `uptime - 0` when no failover had happened yet. Below `ANTI_FLAPPING_DELAY`
+  seconds of uptime that suppressed every failback and manual action while
+  logging a misleading "last failover was Ns ago". Guarded with
+  `[[ $last_failover_mono -gt 0 ]]`, mirroring the emergency path.
+- **Minimum-time-on-backup gates survive a service restart.**
+  `RuntimeDirectory=` (without `RuntimeDirectoryPreserve=`) wipes the state
+  directory on every restart, including `last_failover_to_backup`. Readers
+  defaulted a missing value to `0`, turning "time on backup" into "seconds
+  since the epoch" — which silently satisfied `MIN_BACKUP_TIME`,
+  `EMERGENCY_FAILBACK_MIN_BACKUP_TIME` and made the prolonged-backup alert fire
+  immediately claiming ~496 000 hours. The daemon now reseeds the timestamp at
+  startup when it comes up on backup, and the emergency path refuses to act on
+  an unknown value.
+- **`POST /api/failback` and `POST /api/force-failover` no longer promise what
+  the daemon will discard.** Both now return `409 {"status": "cooldown",
+  "remaining_seconds": N}` while the anti-flapping cooldown runs, instead of
+  `202 "submitted"` for a request the daemon drops with a journal line only.
+  The check is advisory (the daemon stays authoritative) and fails open on a
+  missing or unreadable timestamp.
+- **Web UI shows error responses.** htmx swaps response bodies on 2xx only, and
+  the dashboard's handler set a CSS class without ever writing the body — so
+  `403` (expired CSRF token), `409` and `429` (rate limit) produced no visible
+  reaction at all. The pane now renders the response text for any status
+  ≥ 400.
+
+### Added
+
+- `config_reader.effective_int()` — single-key config lookup with the daemon's
+  base-then-override precedence, so the web layer reasons about the same
+  numbers the daemon uses.
+- Three integration tests covering the cooldown branch: active cooldown → 409
+  without writing a request file, expired cooldown → 202, unreadable timestamp
+  → fails open to 202.
+
 ## [0.5.1] — 2026-07-16
 
 A field incident in the upstream deployment (a captured function's log line

@@ -18,6 +18,7 @@ high-level index.
 | Timing | `CHECK_INTERVAL`, `ROUTE_GUARDIAN_CHECK_INTERVAL` | no (sane defaults) |
 | Hysteresis | `FAILOVER_THRESHOLD_DOWN`, `FAILURE_THRESHOLD`, `RECOVERY_THRESHOLD`, `EMERGENCY_THRESHOLD` | no (sane defaults) |
 | Cooldowns | `ANTI_FLAPPING_DELAY`, `EMERGENCY_FAILBACK_COOLDOWN` | no (sane defaults) |
+| Emergency failback | `EMERGENCY_FAILBACK_MIN_BACKUP_TIME`, `EMERGENCY_FAILBACK_DEGRADED_CHECKS`, `EMERGENCY_FAILBACK_DNS_THRESHOLD_MS` | no — but read the note below before lowering any of them |
 | Failback gating | `MIN_FAILBACK_SCORE`, `MIN_BACKUP_TIME`, `MIN_STABLE_DURATION`, `STABILITY_RESET_THRESHOLD` | no (sane defaults) |
 | Last-resort | `LAST_RESORT_ENABLED`, `LAST_RESORT_PRIMARY_THRESHOLD`, `LAST_RESORT_COOLDOWN` | no (disabled by default) |
 | Latency / loss | `DSL_LATENCY_*`, `LTE_LATENCY_*`, `PACKET_LOSS_*` | no (sane defaults) |
@@ -47,6 +48,44 @@ Most operators only ever touch these. Everything else has working defaults for t
 
 For alerting and quota, set `ALERTING_BACKEND` and `QUOTA_PROVIDER` — see their
 respective how-to guides.
+
+## Note on the emergency-failback variables
+
+`EMERGENCY_FAILBACK_*` controls the escape hatch for "the backup is up but
+end-to-end unusable". It bypasses `MIN_BACKUP_TIME` and
+`MIN_STABLE_DURATION`, which makes it the one group where loosening a
+default changes behaviour the most.
+
+Two things are easy to get wrong:
+
+- **`EMERGENCY_FAILBACK_MIN_BACKUP_TIME` is the real trigger rate.** If the
+  degradation signal is present continuously — which it is whenever the
+  backup is genuinely narrow rather than broken — the escape hatch fires
+  the moment this timer expires, every time. Set too low against a
+  *flapping primary*, it stops being an escape hatch and becomes the normal
+  failback path, returning traffic to a link that is still broken. Raise
+  this before lowering `EMERGENCY_FAILBACK_DNS_THRESHOLD_MS`.
+- **`EMERGENCY_FAILBACK_DEGRADED_CHECKS` is not "N × `CHECK_INTERVAL` of
+  evidence".** The counter ticks once per orchestrator round, but the DNS
+  value it reads comes from `failover-metrics-collector`, which refreshes on
+  its own and slower cycle. Measure your collector's actual cadence:
+
+  ```bash
+  sqlite3 /var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db \
+    "SELECT ROUND(AVG(d),1) FROM (SELECT (julianday(timestamp) -
+     julianday(LAG(timestamp) OVER (ORDER BY id))) * 86400 AS d
+     FROM wan_quality_metrics WHERE interface = 'lte0');"
+  ```
+
+  If that prints ~50 and `CHECK_INTERVAL` is 15, then 20 checks (300 s) are
+  roughly 6 independent samples — and the pre-0.6.0 default of 6 checks was
+  fewer than two, with the same value counted up to four times.
+
+A slow backup is not a dead backup. Before lowering the DNS threshold,
+check whether the uplink is merely saturated: DNS-over-HTTPS needs a TLS
+handshake (~3 RTT of small upstream packets), so a narrow *uplink* inflates
+DNS timing long before the link stops carrying traffic. Comparing DNS timing
+under downlink-saturation versus uplink-saturation separates the two cases.
 
 ## Reading order for a new operator
 

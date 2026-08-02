@@ -109,8 +109,26 @@ RECOVERY_THRESHOLD=20  # CHECK_INTERVAL × RECOVERY_THRESHOLD = ~5 min stability
 EMERGENCY_THRESHOLD=15
 
 # Cooldowns (seconds) prevent ping-pong between primary and backup.
-ANTI_FLAPPING_DELAY=600          # 10 min cooldown for failback + manual actions (score-based failover has no cooldown)
-EMERGENCY_FAILBACK_COOLDOWN=900  # 15 min cooldown for emergency failback
+ANTI_FLAPPING_DELAY=600           # 10 min cooldown for failback + manual actions (score-based failover has no cooldown)
+EMERGENCY_FAILBACK_COOLDOWN=3600  # 60 min cooldown for emergency failback
+
+# Emergency failback — the escape hatch for "backup is up but unusable".
+# Deliberately hard to trigger: it bypasses MIN_BACKUP_TIME/MIN_STABLE_DURATION,
+# so a trigger-happy setting turns it into the normal failback path. Field
+# experience: with a 600 s floor and a 900 s cooldown on a flapping primary,
+# every cycle ended exactly at the floor and the system kept returning to a
+# link that was still broken. Raise the floor rather than the DNS threshold —
+# a backup that is merely slow is still carrying traffic.
+EMERGENCY_FAILBACK_DNS_THRESHOLD_MS=800  # backup DNS time above which it counts as degraded
+EMERGENCY_FAILBACK_DEGRADED_CHECKS=20    # consecutive degraded checks required (see note below)
+EMERGENCY_FAILBACK_MIN_PRIMARY_SCORE=60  # primary must be at least this healthy
+EMERGENCY_FAILBACK_MIN_BACKUP_TIME=1800  # 30 min on backup before the escape hatch opens
+#
+# NOTE on DEGRADED_CHECKS: the counter ticks once per CHECK_INTERVAL, but the
+# DNS value it reads is refreshed by failover-metrics-collector on its own
+# (slower) cycle. Check your collector's actual cadence — if it writes every
+# ~50 s and CHECK_INTERVAL is 15 s, then 20 checks (300 s) are only ~6 truly
+# independent samples, and 6 checks would have been fewer than 2.
 
 # ============================================================================
 # Failback gating

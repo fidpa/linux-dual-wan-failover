@@ -157,6 +157,53 @@ def test_failback_when_on_primary_returns_409_noop(client, fresh_state, monkeypa
     assert not manual_action.exists()
 
 
+def test_failback_during_anti_flapping_cooldown_returns_409_without_writing(
+    client, fixtures_dir, monkeypatch
+):
+    """Cooldown running → 409 'cooldown', no request file, no alert.
+
+    The daemon silently discards a manual action while its anti-flapping
+    cooldown runs. Answering 202 "submitted" for that is a lie the operator
+    cannot see through.
+    """
+    _backup_state(fixtures_dir)
+    sent = _patch_alerts(monkeypatch)
+    # Failover 100s ago, ANTI_FLAPPING_DELAY=600 → 500s left.
+    (fixtures_dir / "wan-state" / "last_failover").write_text(str(int(time.time()) - 100))
+    (fixtures_dir / "failover.conf").write_text("ANTI_FLAPPING_DELAY=600\n")
+
+    resp = _csrf_post(client, "/api/failback")
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["status"] == "cooldown"
+    assert 480 <= body["remaining_seconds"] <= 500
+
+    assert not (fixtures_dir / "wan-state" / "manual_action.json").exists()
+    assert sent == []
+
+
+def test_failback_after_cooldown_expired_returns_202(client, fixtures_dir, monkeypatch):
+    """A stale timestamp older than the delay must not block the request."""
+    _backup_state(fixtures_dir)
+    _patch_alerts(monkeypatch)
+    (fixtures_dir / "wan-state" / "last_failover").write_text(str(int(time.time()) - 900))
+    (fixtures_dir / "failover.conf").write_text("ANTI_FLAPPING_DELAY=600\n")
+
+    resp = _csrf_post(client, "/api/failback")
+    assert resp.status_code == 202
+    assert resp.get_json()["status"] == "submitted"
+
+
+def test_failback_with_garbage_timestamp_fails_open(client, fixtures_dir, monkeypatch):
+    """An unreadable timestamp must not be able to block a genuine failback."""
+    _backup_state(fixtures_dir)
+    _patch_alerts(monkeypatch)
+    (fixtures_dir / "wan-state" / "last_failover").write_text("not-a-number")
+
+    resp = _csrf_post(client, "/api/failback")
+    assert resp.status_code == 202
+
+
 def test_failback_when_state_missing_returns_503(client_no_state):
     # No connection_metrics file written → freshness=missing
     resp = _csrf_post(client_no_state, "/api/failback")

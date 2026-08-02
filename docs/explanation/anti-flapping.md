@@ -52,12 +52,37 @@ Even if the thresholds-and-counters say "switch again", the cooldowns say
 "wait":
 
 ```
-ANTI_FLAPPING_DELAY        = 600 s  (10 min; failback + manual actions only — score-based failover has no cooldown)
-EMERGENCY_FAILBACK_COOLDOWN = 900 s  (15 min after an emergency-failover)
+ANTI_FLAPPING_DELAY         = 600 s  (10 min; failback + manual actions only — score-based failover has no cooldown)
+EMERGENCY_FAILBACK_COOLDOWN = 3600 s (60 min after an emergency failback)
 ```
 
 These bound the worst-case flap rate. Even adversarial traffic can't
 ping-pong faster than ~6 switches/hour.
+
+### A cooldown that never fires is not a cooldown
+
+`last_failover_mono` is an in-memory variable, zero-initialised at daemon
+start, and `get_monotonic_time()` reads `/proc/uptime`. Subtracting the two
+without a guard means the daemon computes `uptime - 0` when no failover has
+happened yet. On a host that has been up for days that is a harmlessly large
+number; within the first `ANTI_FLAPPING_DELAY` seconds after a **reboot** it
+suppresses every failback and every manual action, logging a confident
+"last failover was 47s ago" for a failover that never occurred.
+
+The fix is a one-line guard (`[[ $last_failover_mono -gt 0 ]]`), but the
+lesson generalises: any "time since last X" check needs an explicit
+"X never happened" case, and it will not show up in testing on a
+long-running box. A test for it must fake the clock.
+
+### Cooldowns and runtime state disappear together
+
+`RuntimeDirectory=` without `RuntimeDirectoryPreserve=` clears the state
+directory on **every** service restart. That takes `last_failover_to_backup`
+with it — and readers that default a missing timestamp to `0` silently turn
+"how long have we been on backup" into "seconds since 1970", which passes
+every minimum-time gate ever written. The daemon now reseeds the timestamp at
+startup when it finds itself on backup, and the emergency path refuses to act
+on an unknown value.
 
 ## 4. Stability window for failback
 

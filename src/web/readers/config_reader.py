@@ -86,6 +86,24 @@ def parse_conf(text: str) -> dict[str, str]:
     return out
 
 
+def effective_int(name: str, default: int) -> int:
+    """Return one config value with the daemon's source order applied.
+
+    Same overlay as :func:`read_whitelisted_config` (base, then override —
+    bash last-wins), but for a single key and without the whitelist. Callers
+    that reason about daemon behaviour (e.g. the anti-flapping pre-check in
+    app.py) must see the same number the daemon sees.
+
+    Returns ``default`` for a missing key or a non-integer value.
+    """
+    raw = parse_conf(_read_file(config.CONFIG_PATH))
+    raw.update(parse_conf(_read_file(config.OVERRIDE_CONFIG_PATH)))
+    try:
+        return int(raw[name])
+    except (KeyError, ValueError):
+        return default
+
+
 def read_whitelisted_config() -> list[FieldDescriptor]:
     """Return the whitelisted fields with their current EFFECTIVE values.
 

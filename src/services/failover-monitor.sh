@@ -162,10 +162,10 @@ STABILITY_RESET_THRESHOLD="${STABILITY_RESET_THRESHOLD:-50}"
 # Emergency-failback thresholds: trigger failback when the backup is UP but
 # end-to-end measurements (DNS time) indicate the link is unusable.
 EMERGENCY_FAILBACK_DNS_THRESHOLD_MS="${EMERGENCY_FAILBACK_DNS_THRESHOLD_MS:-800}"
-EMERGENCY_FAILBACK_DEGRADED_CHECKS="${EMERGENCY_FAILBACK_DEGRADED_CHECKS:-6}"
+EMERGENCY_FAILBACK_DEGRADED_CHECKS="${EMERGENCY_FAILBACK_DEGRADED_CHECKS:-20}"
 EMERGENCY_FAILBACK_MIN_PRIMARY_SCORE="${EMERGENCY_FAILBACK_MIN_PRIMARY_SCORE:-60}"
-EMERGENCY_FAILBACK_MIN_BACKUP_TIME="${EMERGENCY_FAILBACK_MIN_BACKUP_TIME:-600}"
-EMERGENCY_FAILBACK_COOLDOWN="${EMERGENCY_FAILBACK_COOLDOWN:-900}"
+EMERGENCY_FAILBACK_MIN_BACKUP_TIME="${EMERGENCY_FAILBACK_MIN_BACKUP_TIME:-1800}"
+EMERGENCY_FAILBACK_COOLDOWN="${EMERGENCY_FAILBACK_COOLDOWN:-3600}"
 WAN_QUALITY_PROM_MAX_AGE="${WAN_QUALITY_PROM_MAX_AGE:-300}"
 
 # v4.8.0: Runtime state for emergency failback (not persisted — resets on restart)
@@ -488,10 +488,19 @@ is_emergency_failback_needed() {
         return 1
     fi
 
-    # Minimum time on backup (avoid racing the legitimate failover we just did)
-    local failover_to_backup_time=0
+    # Minimum time on backup (avoid racing the legitimate failover we just did).
+    # RuntimeDirectory= (without RuntimeDirectoryPreserve) clears the state dir on
+    # every service restart, taking this timestamp with it. Defaulting to 0 turned
+    # time_on_backup into "seconds since the epoch", silently voiding the gate —
+    # exactly when it is needed. Unknown start time now means: do not pass. The
+    # emergency path is a last resort; regular failback still applies.
+    local failover_to_backup_time=""
     if [[ -f "$LAST_FAILOVER_TO_BACKUP_FILE" ]]; then
-        failover_to_backup_time=$(cat "$LAST_FAILOVER_TO_BACKUP_FILE" 2>/dev/null || echo "0")
+        failover_to_backup_time=$(cat "$LAST_FAILOVER_TO_BACKUP_FILE" 2>/dev/null || echo "")
+    fi
+    if [[ ! "$failover_to_backup_time" =~ ^[0-9]+$ ]] || [[ "$failover_to_backup_time" -eq 0 ]]; then
+        log_debug "Emergency failback blocked: backup-start timestamp unknown (state wiped by service restart?)"
+        return 1
     fi
     local current_time time_on_backup
     current_time=$(date +%s)
@@ -879,11 +888,23 @@ perform_failover() {
     # v4.6.1 FIX M3: Using monotonic clock (NTP clock skew cannot bypass or freeze cooldowns)
     local mono_now
     mono_now=$(get_monotonic_time)
-    if [[ "$reason" == "failback" ]]; then
-        # CRITICAL: Failback must ALWAYS respect full cooldown (recovery isn't an emergency)
+    if [[ "$reason" == "failback" || "$reason" == "manual_failback" || "$reason" == "manual_failover_force" ]]; then
+        # CRITICAL: Failback must ALWAYS respect full cooldown (recovery isn't an emergency).
+        # Manual web triggers are included: they must not enable rapid oscillation any
+        # more than auto-failback would. The shipped config documents the cooldown as
+        # covering "failback + manual actions" — before this the code only matched
+        # "failback", so manual_failback/manual_failover_force bypassed it entirely.
+        #
+        # last_failover_mono=0 means "no failover since daemon start", NOT "failover at
+        # uptime 0". get_monotonic_time() reads /proc/uptime, so the bare subtraction
+        # evaluated uptime-0. On a long-running host that is harmlessly large; within
+        # the first ANTI_FLAPPING_DELAY seconds after a REBOOT it suppressed every
+        # failback and every manual action, logging a misleading "last failover was Ns
+        # ago" for a failover that never happened. Guard mirrors the one already used
+        # for last_emergency_failback_mono.
         local time_since_last
         time_since_last=$((mono_now - last_failover_mono))
-        if [[ $time_since_last -lt $ANTI_FLAPPING_DELAY ]]; then
+        if [[ $last_failover_mono -gt 0 ]] && [[ $time_since_last -lt $ANTI_FLAPPING_DELAY ]]; then
             local remaining
             remaining=$((ANTI_FLAPPING_DELAY - time_since_last))
             log_warning "Failback suppressed by anti-flapping (${remaining}s remaining of ${ANTI_FLAPPING_DELAY}s cooldown, last failover was ${time_since_last}s ago)"
@@ -893,7 +914,7 @@ perform_failover() {
         # Reduced cooldown for USR1 signals
         local time_since_last
         time_since_last=$((mono_now - last_failover_mono))
-        if [[ $time_since_last -lt $ANTI_FLAPPING_DELAY_INSTANT ]]; then
+        if [[ $last_failover_mono -gt 0 ]] && [[ $time_since_last -lt $ANTI_FLAPPING_DELAY_INSTANT ]]; then
             local remaining
             remaining=$((ANTI_FLAPPING_DELAY_INSTANT - time_since_last))
             log_warning "Instant failover suppressed by anti-flapping (${remaining}s remaining of ${ANTI_FLAPPING_DELAY_INSTANT}s cooldown)"
@@ -1256,6 +1277,21 @@ main() {
         # Previous: `local current_wan` shadowed the global (line 270), causing wrong state after restart
         current_wan=$(load_state "active_wan" "primary")
         log_info "Preserved active_wan state: $current_wan (from previous run)"
+    fi
+
+    # RuntimeDirectory= (no RuntimeDirectoryPreserve) wipes the state dir on every
+    # service restart, including last_failover_to_backup. Readers defaulted to 0,
+    # making time_on_backup "seconds since the epoch":
+    #   - is_failback_needed: MIN_BACKUP_TIME silently void
+    #   - prolonged-backup alert: fires at once, reporting ~496000h on backup
+    #   - is_emergency_failback_needed: additionally hard-guarded above
+    # The real backup start time is unknowable after a restart. The restart instant
+    # is the conservative approximation: the window restarts instead of vanishing
+    # (old behaviour) or pinning the system to backup forever. MIN_STABLE_DURATION
+    # is unaffected — it has its own guard.
+    if [[ "$current_wan" == "backup" ]] && [[ ! -f "$LAST_FAILOVER_TO_BACKUP_FILE" ]]; then
+        save_state "last_failover_to_backup" "$(date +%s)"
+        log_warning "last_failover_to_backup missing (state wiped by service restart) — set to now; MIN_BACKUP_TIME restarts"
     fi
 
     local iteration=0

@@ -1,0 +1,23 @@
+# Ruff configuration.
+#
+# Why this file exists: until 2026-08-02 the repo carried no ruff config and
+# relied on ruff's implicit defaults. Ruff 0.16 widened that default rule set,
+# so a CI run that installs ruff unpinned (`pip install ruff`) suddenly
+# reported 49 findings against an unchanged tree — v0.5.1 and v0.6.0 produce
+# the identical count. Tool defaults are not a stable contract; the rule set a
+# project lints against belongs in the project.
+#
+# The selection below is exactly ruff's pre-0.16 default (pycodestyle errors +
+# Pyflakes), i.e. the rules this codebase has actually been green against since
+# v0.1.0. It pins intent rather than a tool version, so `pip install ruff`
+# stays unpinned and future upgrades do not silently change the gate.
+#
+# The wider 0.16 rule set is a backlog, not a verdict — 38 of the 49 findings
+# sit in failover-metrics-collector.py (mostly G201 logging-format and DTZ005
+# naive-datetime), worth a dedicated pass. Two of them must NOT be "fixed":
+# EXE001 flags the shebang in failover-metrics-collector.py and the LM1200
+# quota script as "file is not executable", which collides with this repo's
+# deliberate convention of keeping every script 100644 in the index and
+# setting the executable bit at deploy time via install.sh -m 755.
+[lint]
+select = ["E4", "E7", "E9", "F"]

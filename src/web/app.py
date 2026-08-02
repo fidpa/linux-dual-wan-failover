@@ -66,6 +66,36 @@ def _configure_logging(app: Flask) -> None:
         lg.setLevel(logging.INFO)
 
 
+def _anti_flapping_remaining_seconds() -> int:
+    """Seconds left on the daemon's anti-flapping cooldown; 0 when clear.
+
+    The daemon accepts a manual action, then drops it inside perform_failover
+    with "suppressed by anti-flapping" — journal-only, while the API had
+    already answered 202 "submitted". Operators see a button that does
+    nothing and no reason why.
+
+    ADVISORY ONLY. The daemon stays authoritative: it compares an in-memory
+    monotonic clock (/proc/uptime) this process cannot read, while we compare
+    the wall-clock stamp it writes to <state-dir>/last_failover. Both views
+    are lost together on a daemon restart — RuntimeDirectory= wipes the state
+    dir and last_failover_mono resets to 0 — so "file missing" and "daemon has
+    no cooldown" coincide. A cooldown expiring between this check and the
+    daemon's next poll costs one retry, never a wrongly executed switch.
+
+    Fails open (returns 0) on a missing/unreadable/garbage file: a stuck
+    pre-check must not be able to block a genuine failback.
+    """
+    try:
+        last_failover = int(config.LAST_FAILOVER_FILE.read_text(encoding="utf-8").strip())
+    except (FileNotFoundError, PermissionError, OSError, ValueError):
+        return 0
+    delay = config_reader.effective_int("ANTI_FLAPPING_DELAY", 600)
+    elapsed = int(time.time()) - last_failover
+    if elapsed < 0:  # clock skew — treat as "just happened", full cooldown
+        return delay
+    return max(0, delay - elapsed)
+
+
 def create_app() -> Flask:
     if not config.CSRF_ALLOWED_HOSTS:
         raise RuntimeError(
@@ -192,6 +222,22 @@ def create_app() -> Flask:
                 }
             ), 409
 
+        remaining = _anti_flapping_remaining_seconds()
+        if remaining > 0:
+            audit_log.emit(
+                "failback_cooldown",
+                result="rejected",
+                payload={"remaining_seconds": remaining},
+            )
+            return jsonify(
+                {
+                    "status": "cooldown",
+                    "detail": f"Anti-flapping cooldown active — {remaining}s remaining. "
+                    f"The daemon would discard this request.",
+                    "remaining_seconds": remaining,
+                }
+            ), 409
+
         result = manual_action_writer.submit_action("failback")
         if not result["submitted"]:
             audit_log.emit(
@@ -306,6 +352,22 @@ def create_app() -> Flask:
                         "when current_wan=primary"
                     ),
                     "current_wan": snap.current_wan,
+                }
+            ), 409
+
+        remaining = _anti_flapping_remaining_seconds()
+        if remaining > 0:
+            audit_log.emit(
+                "force_failover_cooldown",
+                result="rejected",
+                payload={"remaining_seconds": remaining},
+            )
+            return jsonify(
+                {
+                    "status": "cooldown",
+                    "detail": f"Anti-flapping cooldown active — {remaining}s remaining. "
+                    f"The daemon would discard this request.",
+                    "remaining_seconds": remaining,
                 }
             ), 409
 

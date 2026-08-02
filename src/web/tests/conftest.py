@@ -39,6 +39,10 @@ def fixtures_dir(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(cfg, "WAN_QUALITY_PROM_FILE", prom_file)
     monkeypatch.setattr(cfg, "EVENTS_DB", events_db)
     monkeypatch.setattr(cfg, "MANUAL_ACTION_FILE", state_dir / "manual_action.json")
+    # Without this the anti-flapping pre-check in app.py would read the real
+    # production path — tests would depend on whether a failover timestamp
+    # happens to exist on the machine. Absent by default → pre-check inert.
+    monkeypatch.setattr(cfg, "LAST_FAILOVER_FILE", state_dir / "last_failover")
     monkeypatch.setattr(cfg, "MANUAL_ACTION_LOCK", tmp_path / "manual_action.lock")
     monkeypatch.setattr(cfg, "CONFIG_LOCK", tmp_path / "config.lock")
     monkeypatch.setattr(cfg, "STAGING_CONFIG_PATH", tmp_path / "staging_failover.conf")

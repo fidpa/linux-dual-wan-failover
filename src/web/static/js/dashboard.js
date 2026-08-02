@@ -166,6 +166,13 @@
     const status = event.detail.xhr ? event.detail.xhr.status : 0;
     target.classList.remove('ok', 'error');
     if (status === 0) return;
+    // htmx swaps the response body on 2xx only. Without this the pane keeps its
+    // previous text (or stays empty) on 403/409/429 and merely turns red — the
+    // button reads as dead. Affects the CSRF-expiry (403) and rate-limit (429)
+    // paths as much as the cooldown (409) one.
+    if (status >= 400 && event.detail.xhr) {
+      target.textContent = event.detail.xhr.responseText || `HTTP ${status}`;
+    }
     target.classList.add(status >= 400 ? 'error' : 'ok');
   });
 

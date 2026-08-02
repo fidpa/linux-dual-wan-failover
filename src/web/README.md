@@ -89,6 +89,9 @@ manual_action_writer.submit_action("failback")
         | flock(${MANUAL_ACTION_LOCK})
         | tempfile + os.fsync + os.rename → ${MANUAL_ACTION_FILE}
         v
+        | anti-flapping pre-check (advisory) → HTTP 409 "cooldown" + remaining_seconds
+        |   ... else:
+        v
 audit_log.emit + dispatcher.send  →  HTTP 202 + request_id
         |
         | Daemon main-loop (≤ CHECK_INTERVAL later, ~15 s)
