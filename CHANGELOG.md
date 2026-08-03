@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.7.1] — 2026-08-03
 
 The orchestrator had been announcing `Failover Monitor v0.1.1` on every start
-since May — six releases of drift, because `failover-monitor.sh` carried its own
+since May — nine releases of drift, because `failover-monitor.sh` carried its own
 `readonly SCRIPT_VERSION="0.1.1"` literal that nobody bumped alongside the tag.
 A journal that names a version which has not existed for months cannot answer
 the first question of any incident review: which code is actually running on
