@@ -119,8 +119,9 @@ sudo nmcli connection up "WAN-Primary"
 # Watch for: "Failback triggered: lte0 → eth0 (stable for 5 min)"
 ```
 
-For a fuller treatment of safe testing (including a Docker simulation),
-see [`docs/how-to/safe-failover-testing.md`](../how-to/safe-failover-testing.md).
+For a fuller treatment of safe testing — including a score-collapse
+simulation that leaves the link up — see
+[`docs/how-to/safe-failover-testing.md`](../how-to/safe-failover-testing.md).
 
 ## What's next
 
@@ -128,5 +129,7 @@ see [`docs/how-to/safe-failover-testing.md`](../how-to/safe-failover-testing.md)
   get a ping when failover fires.
 - [Set up quota tracking](../how-to/configure-quota-tracking.md) if your
   backup link is metered (LTE).
+- [Install the optional Web-UI](../how-to/configure-web-ui.md) if you want
+  operator buttons and a live dashboard (`sudo ./install.sh --with-web-ui`).
 - [Read the architecture](../reference/architecture-overview.md) to
   understand what each service does and why there are four.

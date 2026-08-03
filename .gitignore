@@ -1,6 +1,16 @@
 # Publishing assets — not part of the repo
 LINKEDIN_POST.md
 
+# Claude Code working files — private, never published
+CLAUDE.md
+.claude/
+TODO.md
+NOTES.md
+*_POST.md
+*_TEMPLATE.md
+*.private
+*.draft
+
 # Local config overrides and secrets — never commit
 *.local
 .env

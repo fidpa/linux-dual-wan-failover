@@ -14,8 +14,8 @@ high-level index.
 | Optional interfaces | `LAN_INTERFACE`, `MGMT_INTERFACE` | no (empty = disabled) |
 | Routing metrics | `PRIMARY_METRIC_NORMAL`, `PRIMARY_METRIC_DEMOTED`, `BACKUP_METRIC` | no (sane defaults) |
 | Gateways | `PRIMARY_GATEWAY`, `BACKUP_GATEWAY` | no (auto-detected) |
-| Health checks | `CHECK_IPS`, `DNS_SERVERS`, `DNS_TEST_DOMAINS` | no (sane defaults) |
-| WAN quality probe | `WAN_QUALITY_TARGET_MODE`, `WAN_QUALITY_PROBE_SAMPLES` | no (default: `internet`, 10 samples) |
+| Health checks | `CHECK_IPS`, `DNS_SERVERS`, `DNS_TEST_DOMAINS`, `DNS_TEST_METHOD` | no (sane defaults; `DNS_TEST_METHOD=doh` — leave it there, see note below) |
+| WAN quality probe | `WAN_QUALITY_TARGET_MODE`, `WAN_QUALITY_PROBE_SAMPLES`, `WAN_QUALITY_PROM_MAX_AGE` | no (default: `internet`, 10 samples, 300 s) |
 | Timing | `CHECK_INTERVAL`, `ROUTE_GUARDIAN_CHECK_INTERVAL` | no (sane defaults) |
 | Hysteresis | `FAILOVER_THRESHOLD_DOWN`, `FAILURE_THRESHOLD`, `RECOVERY_THRESHOLD`, `EMERGENCY_THRESHOLD` | no (sane defaults) |
 | Cooldowns | `ANTI_FLAPPING_DELAY`, `EMERGENCY_FAILBACK_COOLDOWN` | no (sane defaults) |
@@ -49,6 +49,16 @@ Most operators only ever touch these. Everything else has working defaults for t
 
 For alerting and quota, set `ALERTING_BACKEND` and `QUOTA_PROVIDER` — see their
 respective how-to guides.
+
+## Note on `DNS_TEST_METHOD`
+
+`doh` (the default since v0.1.1) runs the DNS probe as DNS-over-HTTPS through
+`curl --interface`, which is a real `SO_BINDTODEVICE` binding. The `dig` setting
+is a rollback path only: `dig -b` sets the *source address* but cannot force the
+outgoing interface, so on a demoted primary the packets leave via the active
+backup carrying the primary's source IP, the answer never comes back, and a
+perfectly healthy primary reports a 999 ms timeout — which blocks failback. Do
+not switch to `dig` to "fix" a DNS score.
 
 ## Note on `WAN_QUALITY_TARGET_MODE`
 

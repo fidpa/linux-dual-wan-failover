@@ -85,7 +85,7 @@ DNS_TEST_DOMAINS=("google.com" "cloudflare.com")
 
 # DNS test method:
 #   doh  — DNS-over-HTTPS via curl --interface (real SO_BINDTODEVICE binding,
-#          works on demoted backup interfaces). Default since v0.x.
+#          works on demoted backup interfaces). Default since v0.1.1.
 #   dig  — legacy dig -b path (only sets source IP, fails on demoted backup
 #          interfaces due to asymmetric routing). Kept as soft-rollback only.
 # Background: dig -b sets the source IP but cannot force the outgoing

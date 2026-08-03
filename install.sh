@@ -69,6 +69,11 @@ install_libs() {
     install -m 755 "${REPO_ROOT}"/src/services/*.py "${LIB_DIR}/services/"
     # Operator tools (e.g. trace-failover.sh): runnable from ${LIB_DIR}/tools/.
     install -m 755 "${REPO_ROOT}"/src/tools/*.sh "${LIB_DIR}/tools/"
+    # Single source of truth for the version; common.sh reads it from here
+    # (one level above lib/, matching the installed layout). Without it the
+    # daemon logs "v unknown" — harmless, but it makes journals useless for
+    # answering "which version is actually running on this box?".
+    install -m 644 "${REPO_ROOT}/VERSION" "${LIB_DIR}/VERSION"
 }
 
 install_alerting_plugins() {

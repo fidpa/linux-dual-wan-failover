@@ -35,6 +35,46 @@ if ! SCRIPT_DIR_COMMON="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" &
 fi
 readonly SCRIPT_DIR_COMMON
 
+# ============================================================================
+# PROJECT VERSION
+# ============================================================================
+#
+# The version lives in exactly one place: the VERSION file at the repo root.
+# Everything that reports a version reads it from here. Until v0.7.0 the
+# orchestrator carried its own `SCRIPT_VERSION="0.1.1"` literal, which nobody
+# bumped for six releases — the daemon announced 0.1.1 on every start while
+# the tag said 0.7.0. A second place to maintain a number is a place that
+# drifts.
+#
+# Two candidate paths because the repo layout and the installed layout differ
+# in depth: <repo>/src/lib/common.sh vs. ${LIB_DIR}/lib/common.sh.
+_resolve_project_version() {
+    local candidates=(
+        "${SCRIPT_DIR_COMMON}/../../VERSION"   # repo:      src/lib/ -> <root>
+        "${SCRIPT_DIR_COMMON}/../VERSION"      # installed: lib/     -> ${LIB_DIR}
+    )
+    local c version
+    for c in "${candidates[@]}"; do
+        if [[ -r "$c" ]]; then
+            read -r version < "$c" || continue
+            # Guard against a truncated or garbage file: only x.y.z counts.
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "$version"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+if ! PROJECT_VERSION="$(_resolve_project_version)"; then
+    # Not fatal: a missing VERSION file must never keep the failover daemon
+    # from starting. It only costs an accurate version in the logs.
+    PROJECT_VERSION="unknown"
+fi
+# shellcheck disable=SC2034 # consumed by sourcing services (SCRIPT_VERSION)
+readonly PROJECT_VERSION
+
 # Logging defaults — MUST be set BEFORE sourcing the toolkit: its logging.sh
 # initializes these with `:=` at source time, so anything set afterwards is a
 # dead assignment. LOG_TO_STDOUT stays true because journald visibility relies

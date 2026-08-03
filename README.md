@@ -5,7 +5,8 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Bash 4.0+](https://img.shields.io/badge/Bash-4.0%2B-blue?logo=gnu-bash)
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)
-![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange.svg)
+![Release](https://img.shields.io/github/v/tag/fidpa/linux-dual-wan-failover?label=release&sort=semver)
+![Status: Beta](https://img.shields.io/badge/Status-Beta-yellow.svg)
 
 **Sub-10s WAN failover for Linux dual-WAN routers, driven by NetworkManager events.**
 
@@ -45,7 +46,7 @@ primary, LTE backup) for 8+ months and writing down every pitfall.
 | Quota-aware | yes (plugin) | no | no | no |
 | Anti-flap & hysteresis | yes | yes | yes | usually broken |
 | Last-resort failover | yes (opt-in) | no | no | no |
-| Source you can read | ~8.5 kLOC Bash + Python, MIT | closed | C, kernel-tied | yours |
+| Source you can read | ~12.5 kLOC Bash + Python, MIT | closed | C, kernel-tied | yours |
 
 ## Use Cases
 
@@ -140,8 +141,8 @@ since August 2025:
 
 | Metric | Value |
 |--------|-------|
-| Production runtime | 8+ months (Aug 2025 – Apr 2026) |
-| Failover events recorded | 447 |
+| Production runtime | 12 months (Aug 2025 – Aug 2026) |
+| Failover events recorded | 447 (counted through Apr 2026) |
 | Typical failover latency (event path) | 4–6 s |
 | Typical failover latency (polling fallback) | 60–90 s |
 | Failback failure rate | ~3× higher than failover failure rate |
@@ -161,9 +162,11 @@ are preserved, and recovery is as simple as demoting the metric back.
 
 ### The lockfile is signalling, not locking
 
-`/run/linux-dual-wan-failover/failover-in-progress.lock` is a coordination primitive
-in `PID_TIMESTAMP` format. Its presence tells `route-guardian` not to clean up routes
-during an active failover. It is not a mutex; there is only ever one writer per state file.
+`/run/failover-in-progress.lock` is a coordination primitive in `PID_TIMESTAMP`
+format, written by `routing.sh::safe_route_change` on every route change (and by
+`nmcli-failover-monitor` on the emergency path). Its presence tells
+`route-guardian` not to clean up routes during an active failover. It is not a
+mutex; there is only ever one writer per state file.
 See [`docs/explanation/state-file-ownership.md`](docs/explanation/state-file-ownership.md).
 
 ### Every failover has a Correlation-ID
@@ -327,9 +330,16 @@ for the schema and how to write your own.
 
 ## Status
 
-This is **v0.1.1**. Core failover and routing has been running in
-production on a single hardware setup (Raspberry Pi 5 + DSL + Netgear LM1200)
-for over a year, but the public release is a first sanitised cut.
+**Beta.** The current release is tagged in
+[`CHANGELOG.md`](CHANGELOG.md); the latest tag is shown in the release badge
+above. Core failover and routing has been running in production on a single
+hardware setup (Raspberry Pi 5 + DSL + Netgear LM1200) since August 2025, and
+every release since the first public cut has been driven by findings from that
+deployment — the changelog entries are incident write-ups, not feature lists.
+
+The version is still `0.x`: the config surface and the on-disk contracts may
+change between minor releases. Breaking changes and migrations are called out
+under *Upgrade notes* in the changelog.
 
 Expect:
 
@@ -348,11 +358,14 @@ roadmap.
 - [How-to: configure quota tracking](docs/how-to/configure-quota-tracking.md)
 - [How-to: configure the Web-UI](docs/how-to/configure-web-ui.md)
 - [How-to: debug a failover](docs/how-to/debug-failover.md)
+- [How-to: trace one failover by Correlation-ID](docs/how-to/trace-failover.md)
 - [How-to: safe failover testing](docs/how-to/safe-failover-testing.md)
+- [Reference: architecture overview](docs/reference/architecture-overview.md)
 - [Reference: config variables](docs/reference/config.md)
 - [Reference: scoring algorithm](docs/reference/scoring.md)
 - [Reference: Prometheus metrics](docs/reference/metrics.md)
 - [Reference: Web-UI HTTP API](docs/reference/web-api.md)
+- [Explanation: anti-flapping and hysteresis](docs/explanation/anti-flapping.md)
 - [Explanation: why event-driven](docs/explanation/why-event-driven.md)
 - [Explanation: why two services for one job](docs/explanation/why-dual-service.md)
 - [Explanation: state-file ownership](docs/explanation/state-file-ownership.md)

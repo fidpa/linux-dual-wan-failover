@@ -5,6 +5,95 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-08-03
+
+The orchestrator had been announcing `Failover Monitor v0.1.1` on every start
+since May — six releases of drift, because `failover-monitor.sh` carried its own
+`readonly SCRIPT_VERSION="0.1.1"` literal that nobody bumped alongside the tag.
+A journal that names a version which has not existed for months cannot answer
+the first question of any incident review: which code is actually running on
+this box?
+
+An audit of the documentation against the code, prompted by the same review,
+turned up a wrong path in the stale-lock recovery procedure and a debugging
+recipe that reproduced the exact false positive the v0.1.1 DoH migration was
+written to eliminate.
+
+### Fixed
+
+- **The version now lives in exactly one place.** A `VERSION` file at the repo
+  root is the single source; `common.sh` resolves it into `PROJECT_VERSION` and
+  `failover-monitor.sh` derives `SCRIPT_VERSION` from that. `install.sh` ships
+  the file into `${LIB_DIR}`. The resolver probes both the repo layout
+  (`src/lib/` → `../../`) and the installed layout (`lib/` → `../`), and falls
+  back to `unknown` rather than failing: a missing version file must never keep
+  the failover daemon from starting.
+
+- **The documented failover-lockfile path was wrong in three places.** README,
+  `docs/how-to/debug-failover.md` and `docs/explanation/state-file-ownership.md`
+  all gave it as `/run/linux-dual-wan-failover/failover-in-progress.lock`. It is
+  `/run/failover-in-progress.lock` — deliberately at `/run` root, because four
+  services with four different `RuntimeDirectory=` trees have to see it. The
+  stale-lock recovery step in the debugging runbook would have operated on a
+  path that never exists. That placement also means the lockfile survives a
+  restart, which is what its `PID_TIMESTAMP` staleness check is for; both facts
+  are now documented where the path is.
+
+- **The debugging runbook recommended `dig -b` for the DNS probe.** That is the
+  measurement error the DoH migration removed in v0.1.1: `dig -b` sets the
+  source address but cannot force the outgoing interface, so on a demoted
+  primary the packets leave through the active backup and a healthy link reports
+  a timeout. Replaced with the `curl --interface` DoH call the scoring actually
+  performs, including the `Status`/`Answer` validation that filters captive
+  portals.
+
+### Changed (Documentation)
+
+Corrected against the implementation:
+
+- **`state-file-ownership.md` named the wrong lockfile writer.** It credited
+  `nmcli-failover-monitor` "only on emergency failover" — true until v0.4.0,
+  when `safe_route_change()` began writing the lock on every route change.
+- **`web-ui-architecture.md` claimed a 16-key config whitelist.** It is 15, in
+  both `config_reader.py` and `install-failover-conf.sh`.
+- **`metrics.md` described `wan_quality_score` as a composite "of the five
+  metrics above"** while seven rows preceded it. Replaced with the actual
+  weights (latency 25 %, loss 25 %, DNS 20 %, jitter 15 %, HTTP 15 %) and an
+  explicit note that the gateway metrics are reported but do not feed the score.
+- **`architecture-overview.md` predated v0.5.0.** It listed neither the
+  Correlation-ID state files nor the optional `failover-web` unit and the
+  health-check timer.
+- **`web-api.md`'s `/api/history` sample predated the `event_id` column.**
+- **`install-from-source.md` omitted `src/tools/`**, so a manual install left
+  `trace-failover.sh` absent. Also adds the `_schema` directory and the Web-UI
+  leftovers (sudoers, tmpfiles, logrotate, sbin helper, system user) to the
+  uninstall procedure.
+- **`01-quickstart.md` referred to a Docker simulation** that
+  `safe-failover-testing.md` does not contain.
+- **`docs/README.md` promised "see Explanation docs below"** with no such list,
+  and omitted the Web-UI documentation entirely.
+- **`config.md` did not document `DNS_TEST_METHOD`**, which `scoring.md` relies
+  on, nor `WAN_QUALITY_PROM_MAX_AGE`. Both added, with a note on why `dig` is a
+  rollback path and not a fix.
+- **`failover.conf.example` carried an unfilled placeholder** ("Default since
+  v0.x."); DoH became the default in v0.1.1.
+- README: the static `Status: Alpha` badge is replaced by a shields.io tag badge
+  that tracks the latest tag, the Status section no longer hardcodes a version
+  (it claimed v0.1.1 while contradicting its own runtime table), and the source
+  size is corrected from ~8.5 kLOC to ~12.5 kLOC (measured, tests excluded).
+
+### Added
+
+- `.gitignore` now covers the private working files the publishing rules
+  require to stay out of the repository (`CLAUDE.md`, `.claude/`, `TODO.md`,
+  `*_POST.md`); it previously caught only `LINKEDIN_POST.md`.
+
+### Upgrade notes
+
+No configuration or on-disk format changes. Existing installations keep working
+unchanged; re-running `install.sh` is what places the `VERSION` file, and until
+then the daemon logs `v unknown` instead of a number. Nothing else reads it.
+
 ## [0.7.0] — 2026-08-02
 
 WAN quality was measured against the wrong endpoint. `test_wan_quality()` probed

@@ -44,7 +44,7 @@ Written from `test_wan_quality()` in `src/lib/network.sh`.
 | `wan_gateway_reachable` | gauge | `interface` | 1 if the gateway answers ICMP, 0 otherwise. |
 | `wan_dns_time_milliseconds` | gauge | `interface` | DNS-over-HTTPS resolution time. 999 means timeout. |
 | `wan_http_time_milliseconds` | gauge | `interface` | HTTP connectivity-check time. 999 means failure. |
-| `wan_quality_score` | gauge | `interface` | Weighted 0–100 composite of the five metrics above. |
+| `wan_quality_score` | gauge | `interface` | Weighted 0–100 composite: latency 25 %, packet loss 25 %, DNS 20 %, jitter 15 %, HTTP 15 %. The gateway metrics are reported alongside but do **not** feed this score. |
 
 **Probe target vs. gateway.** The first three metrics measure the *internet*
 path — the first `CHECK_IPS` entry that answers. The gateway is measured

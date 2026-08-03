@@ -26,9 +26,12 @@ Recommended (but optional):
 /usr/local/lib/linux-dual-wan-failover/
 ├── lib/                  # sourced libraries
 ├── services/             # daemons (Bash + Python)
-└── plugins/
-    ├── alerting/
-    └── quota-providers/
+├── tools/                # operator CLIs (trace-failover.sh)
+├── plugins/
+│   ├── alerting/
+│   └── quota-providers/
+│       └── _schema/      # quota-snapshot JSON schema
+└── web/                  # only with --with-web-ui (src/ + venv/)
 
 /etc/linux-dual-wan-failover/
 ├── failover.conf         # main config
@@ -53,16 +56,22 @@ Recommended (but optional):
 git clone https://github.com/fidpa/linux-dual-wan-failover.git
 cd linux-dual-wan-failover
 
-# 1. Libraries and services.
+# 1. Libraries, services and operator tools.
 sudo install -d /usr/local/lib/linux-dual-wan-failover/lib
 sudo install -d /usr/local/lib/linux-dual-wan-failover/services
+sudo install -d /usr/local/lib/linux-dual-wan-failover/tools
 sudo install -m 644 src/lib/*.sh        /usr/local/lib/linux-dual-wan-failover/lib/
 sudo install -m 755 src/services/*.sh   /usr/local/lib/linux-dual-wan-failover/services/
 sudo install -m 755 src/services/*.py   /usr/local/lib/linux-dual-wan-failover/services/
+sudo install -m 755 src/tools/*.sh      /usr/local/lib/linux-dual-wan-failover/tools/
 
 # 2. Plugins.
 sudo install -d /usr/local/lib/linux-dual-wan-failover/plugins/alerting
 sudo install -m 644 plugins/alerting/*.sh /usr/local/lib/linux-dual-wan-failover/plugins/alerting/
+
+sudo install -d /usr/local/lib/linux-dual-wan-failover/plugins/quota-providers/_schema
+sudo install -m 644 plugins/quota-providers/_schema/* \
+    /usr/local/lib/linux-dual-wan-failover/plugins/quota-providers/_schema/
 
 # Quota plugins ship per-provider; install only the one you'll use.
 # Example for netgear-lm1200:
@@ -72,6 +81,9 @@ sudo install -m 755 \
     /usr/local/lib/linux-dual-wan-failover/plugins/quota-providers/netgear-lm1200/
 
 # 3. systemd units.
+# Skip failover-web.service unless you also install the optional Web-UI;
+# it is easier to let `install.sh --with-web-ui` handle that whole branch
+# (venv, failover-web user, sudoers, tmpfiles, logrotate).
 sudo install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
 
 # 4. Config.
@@ -123,5 +135,18 @@ sudo rm -rf /var/lib/linux-dual-wan-failover /var/log/linux-dual-wan-failover
 # Optional: also remove your config.
 sudo rm -rf /etc/linux-dual-wan-failover
 
+sudo systemctl daemon-reload
+```
+
+If you installed the Web-UI, it leaves a few things outside those paths:
+
+```bash
+sudo systemctl disable --now failover-web.service
+sudo rm -f /etc/systemd/system/failover-web.service \
+           /etc/sudoers.d/failover-web \
+           /etc/tmpfiles.d/failover-web.conf \
+           /etc/logrotate.d/failover-web \
+           /usr/local/sbin/install-failover-conf
+sudo userdel failover-web
 sudo systemctl daemon-reload
 ```

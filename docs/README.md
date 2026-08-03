@@ -17,11 +17,23 @@ This documentation follows the [Diataxis](https://diataxis.fr/) framework:
 | …test failover safely without breaking SSH | [how-to/safe-failover-testing.md](how-to/safe-failover-testing.md) |
 | …add Mattermost alerts | [how-to/configure-mattermost.md](how-to/configure-mattermost.md) |
 | …track LTE quota | [how-to/configure-quota-tracking.md](how-to/configure-quota-tracking.md) |
+| …run the optional Web-UI | [how-to/configure-web-ui.md](how-to/configure-web-ui.md) |
 | …look up a config variable | [reference/config.md](reference/config.md) |
 | …read a Prometheus metric | [reference/metrics.md](reference/metrics.md) |
+| …call the Web-UI HTTP API | [reference/web-api.md](reference/web-api.md) |
 | …understand the scoring algorithm | [reference/scoring.md](reference/scoring.md) |
 | …understand the architecture | [reference/architecture-overview.md](reference/architecture-overview.md) |
 | …know WHY the design is what it is | see Explanation docs below |
+
+## Explanation docs
+
+| Document | Answers |
+|---|---|
+| [explanation/why-event-driven.md](explanation/why-event-driven.md) | Why polling alone isn't enough, and what the event path buys. |
+| [explanation/why-dual-service.md](explanation/why-dual-service.md) | Why detection and orchestration are separate services. |
+| [explanation/anti-flapping.md](explanation/anti-flapping.md) | Thresholds, cooldowns, stability windows — and why failback fails more often than failover. |
+| [explanation/state-file-ownership.md](explanation/state-file-ownership.md) | The single-writer rule, atomic writes, and why `/run` state vanishes on restart. |
+| [explanation/web-ui-architecture.md](explanation/web-ui-architecture.md) | The Web-UI's file-trigger handshake, privilege split, and threat model. |
 
 ## Recommended reading order
 

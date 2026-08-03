@@ -12,6 +12,11 @@ There is a reason it isn't one.
 | `route-guardian` | Route enforcement: cleans duplicates, ensures correct metrics | Every ROUTE_GUARDIAN_CHECK_INTERVAL (10 s default) |
 | `failover-metrics-collector` | Observability: Prometheus textfile + SQLite event log | Every 5 s |
 
+A fifth unit, `failover-web`, is **optional** and not part of the failover path —
+see [`../explanation/web-ui-architecture.md`](../explanation/web-ui-architecture.md).
+`failover-monitor-health-check.timer` is a watchdog that restarts a wedged
+orchestrator.
+
 ## Data flow
 
 ```
@@ -53,6 +58,9 @@ There is a reason it isn't one.
 | Failover lock | `/run/failover-in-progress.lock` | `<PID>_<TIMESTAMP>` | routing.sh `safe_route_change` (every failover/failback) + nmcli-failover-monitor (emergency path) | route-guardian (skips its whole check cycle while present) |
 | Active WAN | `/run/linux-dual-wan-failover/wan-state/active_wan` | `eth0` or `lte0` | failover-monitor | route-guardian, metrics-collector |
 | Score snapshot | `/run/linux-dual-wan-failover/wan-state/connection_metrics` | JSON | failover-monitor | metrics-collector |
+| Pending Event-ID | `/run/linux-dual-wan-failover/wan-state/pending_failover_id` | `<PID>_<TIMESTAMP>` | nmcli-failover-monitor (written **before** USR1, so the trap does no I/O) | failover-monitor (adopts and consumes it) |
+| Last Event-ID | `/run/linux-dual-wan-failover/wan-state/last_failover_id` | `<PID>_<TIMESTAMP>` | routing.sh / nmcli-failover-monitor | metrics-collector (`event_id` DB column) |
+| Manual action | `/run/linux-dual-wan-failover/wan-state/manual_action.json` | JSON | failover-web (optional) | failover-monitor (30 s freshness + request-ID dedup) |
 | Quota snapshot | `/var/lib/linux-dual-wan-failover/quota-snapshot.json` | JSON (schema in `plugins/quota-providers/_schema/`) | quota provider | failover-monitor |
 
 The lockfile uses `PID_TIMESTAMP` rather than a bare touch-file because of
@@ -61,6 +69,16 @@ lockfile, paused the route-guardian indefinitely, and was only caught
 after operators noticed routes weren't being cleaned up. Now route-guardian
 verifies the PID is alive and the timestamp is fresh; if not, it removes
 the lockfile and (optionally) alerts.
+
+Since v0.5.0 that same `PID_TIMESTAMP` string doubles as the failover
+**Correlation-ID**: it is minted at the earliest detection point, handed across
+the USR1/lockfile boundaries, stamped into every service log as
+`FAILOVER_EVENT_ID=<id>`, and written to the `event_id` column of the events
+database. See [`../how-to/trace-failover.md`](../how-to/trace-failover.md).
+
+Note that the lockfile sits at `/run` root rather than inside any service's
+`RuntimeDirectory=` tree — that is what makes it visible to all four services,
+and also why it outlives a restart and needs the explicit staleness check.
 
 ## Why separate detection and orchestration?
 

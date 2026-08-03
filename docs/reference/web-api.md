@@ -99,12 +99,18 @@ Returns recent failover events from the SQLite event store.
       "backup_score_before": 80,
       "reason": "score_based",
       "actual_failover_duration_ms": 4500,
-      "inter_event_duration_seconds": 0
+      "inter_event_duration_seconds": 0,
+      "event_id": "3741608_1782676271"
     },
     ...
   ]
 }
 ```
+
+`event_id` is the failover Correlation-ID (see
+[`../how-to/trace-failover.md`](../how-to/trace-failover.md)). It is `null` for
+events recorded before v0.5.0, and the reader also degrades to `null` against a
+database whose `event_id` column has not been migrated yet.
 
 ### `GET /api/config`
 

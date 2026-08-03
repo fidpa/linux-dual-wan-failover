@@ -38,9 +38,11 @@ cat /run/linux-dual-wan-failover/failover-monitor.pid
 ps -p "$(cat /run/linux-dual-wan-failover/failover-monitor.pid)" -o pid,cmd
 
 # Is there a stale lockfile blocking route-guardian?
-ls -la /run/linux-dual-wan-failover/failover-in-progress.lock
+# (It lives at /run root, not in the per-service RuntimeDirectory tree.)
+ls -la /run/failover-in-progress.lock
+cat /run/failover-in-progress.lock          # PID_TIMESTAMP — also the Event-ID
 # If the file exists and the PID inside is dead → stale; remove it:
-sudo rm -f /run/linux-dual-wan-failover/failover-in-progress.lock
+sudo rm -f /run/failover-in-progress.lock
 ```
 
 ## Score doesn't reflect reality
@@ -55,7 +57,16 @@ sudo journalctl -u failover-monitor --since '2 minutes ago' | grep -E 'latency|l
 # Manual check (same probes the scoring uses):
 ping -c 3 -I eth0 8.8.8.8
 ping -c 3 -I lte0 8.8.8.8
-dig +short google.com @8.8.8.8 -b 0.0.0.0
+
+# DNS: the scoring uses DNS-over-HTTPS bound to the *device*, not `dig -b`.
+# `dig -b` only sets the source address — packets still leave via the active
+# default route, so a dead backup would report "DNS OK". Reproduce it properly:
+curl -sS --interface lte0 --max-time 3 --connect-timeout 2 \
+    --resolve dns.google:443:8.8.8.8 \
+    -H 'Accept: application/dns-json' \
+    'https://dns.google/resolve?name=google.com&type=A' | jq '.Status, (.Answer|length)'
+# Healthy: Status 0 and at least one answer. The scoring treats anything else
+# as a failure (999 ms), including a captive portal returning HTTP 200.
 ```
 
 ## Routes look wrong

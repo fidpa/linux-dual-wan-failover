@@ -22,7 +22,7 @@ discipline that doesn't require any locking on the read side.
 | File | Writer | Readers |
 |------|--------|---------|
 | `/run/linux-dual-wan-failover/failover-monitor.pid` | `failover-monitor` (on startup) | `nmcli-failover-monitor`, operators |
-| `/run/linux-dual-wan-failover/failover-in-progress.lock` | `nmcli-failover-monitor` (only on emergency failover) | `route-guardian` (skips while present) |
+| `/run/failover-in-progress.lock` | `routing.sh::safe_route_change` (every route change) + `nmcli-failover-monitor` (emergency path) | `route-guardian` (skips its whole check cycle while present) |
 | `/run/linux-dual-wan-failover/wan-state/active_wan` | `failover-monitor` (after each route change) | `route-guardian`, `failover-metrics-collector` |
 | `/run/linux-dual-wan-failover/wan-state/connection_metrics` | `failover-monitor` (every 5 s) | `failover-metrics-collector` |
 | `/run/linux-dual-wan-failover/wan-state/pending_failover_id` | `nmcli-failover-monitor` (before USR1) | `failover-monitor` (consumes it) |
@@ -39,6 +39,12 @@ discipline that doesn't require any locking on the read side.
 so systemd removes `/run/linux-dual-wan-failover/` — including all of
 `wan-state/` — every time a service stops. That is deliberate (no stale
 state after a crash), but it makes one class of bug easy to write:
+
+> The failover lockfile is the one exception: it lives at `/run` root, not
+> inside the `RuntimeDirectory=` tree, precisely so it is shared between four
+> services with different runtime directories. It therefore survives a restart
+> and has to be aged out explicitly — which is what the `PID_TIMESTAMP` format
+> and `route-guardian`'s staleness check are for.
 
 > A reader that defaults a missing timestamp to `0` does not get
 > "no information". It gets **1 January 1970**, and every
@@ -89,9 +95,13 @@ they get a consistent snapshot.
 
 The lockfile (`failover-in-progress.lock`) is a _coordination_ primitive,
 not an exclusion lock. Its presence means "the route table is being
-modified emergency-style; please don't second-guess the routes for the
-next 30 seconds, route-guardian." Removing it is the _signal_ that the
-emergency window is over.
+modified; please don't second-guess the routes for the next 30 seconds,
+route-guardian." Removing it is the _signal_ that the window is over.
+
+Until v0.4.0 only the nmcli emergency path wrote it, so regular score-based
+and manual failovers ran without pausing the guardian — which could revert a
+fresh metric swap in the window before `active_wan` is persisted. Every route
+change writes it now.
 
 `flock` is not used here because there is no need to serialize writes — there
 is only ever one writer per file. The lockfile is signalling, not locking.

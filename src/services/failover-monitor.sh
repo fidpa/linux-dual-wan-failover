@@ -22,7 +22,6 @@ readonly SCRIPT_DIR
 LIB_DIR="${LIB_DIR:-${SCRIPT_DIR}/../lib}"
 readonly LIB_DIR
 
-readonly SCRIPT_VERSION="0.1.1"
 readonly PID_FILE="${PID_FILE:-/run/failover-monitor.pid}"
 
 # ---- Manual-action handshake (optional Web-UI) ----------------------------
@@ -50,6 +49,10 @@ if [[ ! -f "${LIB_DIR}/common.sh" ]]; then
 fi
 # shellcheck source=../lib/common.sh
 source "${LIB_DIR}/common.sh" || exit 1
+
+# Single source of truth: the VERSION file, resolved by common.sh. Declared
+# here (not above) because it depends on common.sh having been sourced.
+readonly SCRIPT_VERSION="${PROJECT_VERSION}"
 
 # shellcheck source=../lib/performance.sh
 source "${LIB_DIR}/performance.sh" || {

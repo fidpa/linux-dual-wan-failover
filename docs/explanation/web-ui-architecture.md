@@ -104,7 +104,7 @@ The second rule used to be `sudo /usr/bin/install` with arguments —
 which copied attacker-controlled bytes verbatim into a file the daemon
 later `source`s. We replaced that with the root-owned, argument-free
 helper. The helper re-parses every line in root context against the
-same 16-key whitelist the web app enforces. Anything unknown, anything
+same 15-key whitelist the web app enforces. Anything unknown, anything
 with shell metacharacters, anything non-integer aborts. The web app
 has no way to talk into `/etc/<project>/` except through this single
 choke point.
