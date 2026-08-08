@@ -55,7 +55,8 @@ orchestrator.
 | Primitive | Path | Format | Owner | Reader |
 |-----------|------|--------|-------|--------|
 | Orchestrator PID | `/run/linux-dual-wan-failover/failover-monitor.pid` | int | failover-monitor | nmcli-failover-monitor |
-| Failover lock | `/run/failover-in-progress.lock` | `<PID>_<TIMESTAMP>` | routing.sh `safe_route_change` (every failover/failback) + nmcli-failover-monitor (emergency path) | route-guardian (skips its whole check cycle while present) |
+| Failover marker | `/run/failover-in-progress.lock` | `<PID>_<TIMESTAMP>` | routing.sh `safe_route_change` (every failover/failback) + nmcli-failover-monitor (emergency path) | route-guardian (skips its whole check cycle while present) |
+| Route lock | `/run/failover-route.lock` | empty — held via `flock`, fd 201 | whoever mutates routes: routing.sh (whole transaction), route-guardian and nmcli-failover-monitor (around each `ip route` call) | nobody; contention is the message. Guardian skips its repair when it cannot take it |
 | Active WAN | `/run/linux-dual-wan-failover/wan-state/active_wan` | `eth0` or `lte0` | failover-monitor | route-guardian, metrics-collector |
 | Score snapshot | `/run/linux-dual-wan-failover/wan-state/connection_metrics` | JSON | failover-monitor | metrics-collector |
 | Pending Event-ID | `/run/linux-dual-wan-failover/wan-state/pending_failover_id` | `<PID>_<TIMESTAMP>` | nmcli-failover-monitor (written **before** USR1, so the trap does no I/O) | failover-monitor (adopts and consumes it) |

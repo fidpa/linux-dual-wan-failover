@@ -61,6 +61,24 @@ readonly MAX_ROUTE_RETRIES=3
 readonly FAILOVER_LOCKFILE="/run/failover-in-progress.lock"
 readonly FAILOVER_LOCKFILE_HOLD_SECONDS=30  # covers NM DHCP straggler events
 
+# Real mutual exclusion. The marker file above is not one: route-guardian checks
+# it once per cycle and keeps mutating routes afterwards, so a failover starting
+# inside that window can be reverted by the guardian's own repair logic.
+#
+# The marker stays for what it is good at — the 30 s settle window against NM DHCP
+# stragglers, and carrying the failover event id for trace-failover. flock is the
+# fine-grained net underneath it.
+#
+# Fixed descriptor rather than {var}: under 'set -u' an unset variable after a
+# failed exec would abort the daemon. 200 is a common choice in shell scripts, so
+# 201 keeps this out of the way of anything the operator sources.
+#
+# /run rather than /tmp — the units run with PrivateTmp=yes, where a lock in /tmp
+# would be three separate files in three namespaces and silently useless.
+readonly ROUTE_LOCK_FILE="/run/failover-route.lock"
+readonly ROUTE_LOCK_FD=201
+readonly ROUTE_LOCK_WAIT=10
+
 # Failover state tracking
 current_active_interface=""
 last_failover_timestamp=0
@@ -164,6 +182,39 @@ restore_routes_from_backup() {
 # ROUTE EXECUTION
 # ============================================================================
 
+# Take the exclusive route lock. Returns 1 if it could not be had; the caller
+# aborts the transaction rather than racing the guardian.
+#
+# RULE for every region between acquire and release: do not fork. flock lives on
+# the open file description, not the descriptor — a child started with '&' inherits
+# it and keeps holding the lock after the region ends.
+# shellcheck disable=SC2120  # wait time is optional, defaults to ROUTE_LOCK_WAIT
+_acquire_route_lock() {
+    local wait_s="${1:-$ROUTE_LOCK_WAIT}"
+
+    if ! eval "exec ${ROUTE_LOCK_FD}>\"\$ROUTE_LOCK_FILE\""; then
+        log "ERROR" "Cannot open route lock ($ROUTE_LOCK_FILE)"
+        return 1
+    fi
+
+    if ! flock -w "$wait_s" -x "$ROUTE_LOCK_FD"; then
+        log "ERROR" "Route lock not acquired (waited ${wait_s}s)"
+        eval "exec ${ROUTE_LOCK_FD}>&-"
+        return 1
+    fi
+
+    return 0
+}
+
+# Release the route lock. Must run on EVERY exit path of the region — a leaked
+# descriptor in a long-running daemon holds the lock until the next acquire and
+# starves every guardian repair in between.
+_release_route_lock() {
+    flock -u "$ROUTE_LOCK_FD" 2>/dev/null || true
+    eval "exec ${ROUTE_LOCK_FD}>&-" 2>/dev/null || true
+    return 0
+}
+
 # Create the route-guardian pause lockfile (PID_TIMESTAMP ownership).
 # Non-fatal on failure — the failover must proceed even if /run is unwritable.
 _create_failover_lockfile() {
@@ -235,9 +286,16 @@ safe_route_change() {
         "FAILOVER_EVENT_ID=${FAILOVER_EVENT_ID:-unknown}" \
         "FROM_INTERFACE=$old_interface" "TO_INTERFACE=$new_interface"
 
+    # From here until the release below, nothing forks (see _acquire_route_lock).
+    if ! _acquire_route_lock; then
+        log "ERROR" "Route change aborted: route lock not acquired (guardian or emergency path active)"
+        return 1
+    fi
+
     # Create backup of current routes
     if ! backup_file=$(backup_current_routes); then
         log "ERROR" "Failed to backup routes - aborting route change"
+        _release_route_lock
         return 1
     fi
 
@@ -253,6 +311,7 @@ safe_route_change() {
     if [[ -z "$new_gateway" ]]; then
         log "ERROR" "No gateway found for interface: $new_interface"
         rollback_route_change "$backup_file"
+        _release_route_lock
         _release_failover_lockfile 0
         return 1
     fi
@@ -265,6 +324,10 @@ safe_route_change() {
                 "FAILOVER_EVENT_ID=${FAILOVER_EVENT_ID:-unknown}" \
                 "TO_INTERFACE=$new_interface"
             rm -f "$backup_file"
+            # Release the route lock BEFORE _release_failover_lockfile: that one
+            # backgrounds a 'sleep &' child which would inherit the descriptor and
+            # keep the lock for the full 30 s settle window.
+            _release_route_lock
             # Hold the lock through the stabilization window (NM may re-add
             # routes up to ~1s after link events; 30s = 3 guardian cycles).
             _release_failover_lockfile "$FAILOVER_LOCKFILE_HOLD_SECONDS"
@@ -272,12 +335,14 @@ safe_route_change() {
         else
             log "ERROR" "Route change verification failed"
             rollback_route_change "$backup_file"
+            _release_route_lock
             _release_failover_lockfile 0
             return 1
         fi
     else
         log "ERROR" "Route change execution failed"
         rollback_route_change "$backup_file"
+        _release_route_lock
         _release_failover_lockfile 0
         return 1
     fi

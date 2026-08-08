@@ -94,10 +94,14 @@ Two things are easy to get wrong:
   *flapping primary*, it stops being an escape hatch and becomes the normal
   failback path, returning traffic to a link that is still broken. Raise
   this before lowering `EMERGENCY_FAILBACK_DNS_THRESHOLD_MS`.
-- **`EMERGENCY_FAILBACK_DEGRADED_CHECKS` is not "N × `CHECK_INTERVAL` of
-  evidence".** The counter ticks once per orchestrator round, but the DNS
-  value it reads comes from `failover-metrics-collector`, which refreshes on
-  its own and slower cycle. Measure your collector's actual cadence:
+- **`EMERGENCY_FAILBACK_DEGRADED_CHECKS` counts readings, not rounds.** The
+  orchestrator ticks once per `CHECK_INTERVAL`, but the DNS value it reads comes
+  from `failover-metrics-collector`, which refreshes on its own and slower cycle.
+  Until 0.8.0 the counter advanced on every round, so the same sample was counted
+  repeatedly and a single outlier could reach the threshold on its own. It now
+  advances only when `wan_quality.prom` has actually been rewritten — one tick is
+  one independent measurement. Measure your collector's actual cadence to convert
+  the value into wall-clock evidence:
 
   ```bash
   sqlite3 /var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db \
@@ -106,9 +110,11 @@ Two things are easy to get wrong:
      FROM wan_quality_metrics WHERE interface = 'lte0');"
   ```
 
-  If that prints ~50 and `CHECK_INTERVAL` is 15, then 20 checks (300 s) are
-  roughly 6 independent samples — and the pre-0.6.0 default of 6 checks was
-  fewer than two, with the same value counted up to four times.
+  If that prints ~50, the default of 6 readings is ~300 s of evidence. The same
+  number meant something entirely different before 0.8.0: back then it counted
+  rounds, so 6 was under two real samples and the 0.6.0 workaround raised it to
+  20 to compensate. Both defaults describe the same intent — roughly five minutes
+  of independent measurements — one just says so honestly.
 
 A slow backup is not a dead backup. Before lowering the DNS threshold,
 check whether the uplink is merely saturated: DNS-over-HTTPS needs a TLS

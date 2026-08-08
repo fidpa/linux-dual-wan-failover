@@ -23,6 +23,7 @@ discipline that doesn't require any locking on the read side.
 |------|--------|---------|
 | `/run/linux-dual-wan-failover/failover-monitor.pid` | `failover-monitor` (on startup) | `nmcli-failover-monitor`, operators |
 | `/run/failover-in-progress.lock` | `routing.sh::safe_route_change` (every route change) + `nmcli-failover-monitor` (emergency path) | `route-guardian` (skips its whole check cycle while present) |
+| `/run/failover-route.lock` | held with `flock` by whoever is mutating routes — `routing.sh`, `route-guardian`, `nmcli-failover-monitor` | nobody reads it; the file is a lock, not a message (see below) |
 | `/run/linux-dual-wan-failover/wan-state/active_wan` | `failover-monitor` (after each route change) | `route-guardian`, `failover-metrics-collector` |
 | `/run/linux-dual-wan-failover/wan-state/connection_metrics` | `failover-monitor` (every 5 s) | `failover-metrics-collector` |
 | `/run/linux-dual-wan-failover/wan-state/pending_failover_id` | `nmcli-failover-monitor` (before USR1) | `failover-monitor` (consumes it) |
@@ -91,21 +92,53 @@ old file or the new file, never a partial write. As long as readers
 re-open between calls (don't `tail -f` your way around the abstraction),
 they get a consistent snapshot.
 
-## What about `flock`?
+## Two locks, and why both exist
 
-The lockfile (`failover-in-progress.lock`) is a _coordination_ primitive,
-not an exclusion lock. Its presence means "the route table is being
-modified; please don't second-guess the routes for the next 30 seconds,
-route-guardian." Removing it is the _signal_ that the window is over.
+`failover-in-progress.lock` is a _coordination_ primitive, not an exclusion
+lock. Its presence means "the route table is being modified; please don't
+second-guess the routes for the next 30 seconds, route-guardian." Removing it is
+the _signal_ that the window is over.
 
 Until v0.4.0 only the nmcli emergency path wrote it, so regular score-based
 and manual failovers ran without pausing the guardian — which could revert a
 fresh metric swap in the window before `active_wan` is persisted. Every route
 change writes it now.
 
-`flock` is not used here because there is no need to serialize writes — there
-is only ever one writer per file. The lockfile is signalling, not locking.
-
 The PID-and-timestamp format (`PID_TIMESTAMP`) is so a stale lockfile
 (parent process crashed before cleanup) can be detected and cleaned up
 by a sibling — see `route-guardian` for the cleanup logic.
+
+**This was not enough, and the reasoning that said it was had a hole in it.**
+Earlier versions of this document argued that no `flock` was needed because
+there is only ever one writer per file. That is true and beside the point: the
+contention is not over the *file*, it is over the *routing table*. Route-guardian
+checks the marker once at the top of its cycle and then keeps mutating routes for
+the rest of it. A failover starting a few milliseconds after that check runs
+entirely inside the guardian's cycle — and the guardian, working from the state
+it read before the swap, restores the old metric or removes the new route as a
+duplicate.
+
+Since 0.8.0 there is a second file, `/run/failover-route.lock`, held with a real
+`flock` on a fixed descriptor. It is not a replacement: the marker still does the
+30-second settle window and still carries the event id for `trace-failover`.
+The `flock` sits underneath and serialises the individual mutations — the
+orchestrator holds it across its whole transaction, route-guardian and the
+emergency path take it around each `ip route` call and skip their repair if they
+cannot get it.
+
+Two properties made this workable where a naive version would not be:
+
+- **The regions contain no forks.** `flock` lives on the open file description,
+  not on the descriptor, and `fork` shares it. A `send_alert … &` or a
+  `( sleep 30 … ) &` started inside a region inherits the lock and keeps holding
+  it after the region ends — with a hanging Mattermost `curl`, indefinitely. Every
+  alert therefore fires after the release, and the orchestrator drops the lock
+  before it backgrounds its settle-window cleanup.
+- **Delete and re-add live in the same region.** Route-guardian deletes stale
+  default routes before calling `add_missing_route`. Locking only the add would
+  let the lock change hands in between and leave the interface with no default
+  route at all, so the decision to skip is made *before* the delete.
+
+The kernel releases a `flock` when the holding process dies, so this file needs
+no stale detection of its own — which is exactly why the marker, which does need
+it, was kept separate rather than merged in.

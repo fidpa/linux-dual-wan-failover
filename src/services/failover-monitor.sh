@@ -165,14 +165,15 @@ STABILITY_RESET_THRESHOLD="${STABILITY_RESET_THRESHOLD:-50}"
 # Emergency-failback thresholds: trigger failback when the backup is UP but
 # end-to-end measurements (DNS time) indicate the link is unusable.
 EMERGENCY_FAILBACK_DNS_THRESHOLD_MS="${EMERGENCY_FAILBACK_DNS_THRESHOLD_MS:-800}"
-EMERGENCY_FAILBACK_DEGRADED_CHECKS="${EMERGENCY_FAILBACK_DEGRADED_CHECKS:-20}"
+EMERGENCY_FAILBACK_DEGRADED_CHECKS="${EMERGENCY_FAILBACK_DEGRADED_CHECKS:-6}"
 EMERGENCY_FAILBACK_MIN_PRIMARY_SCORE="${EMERGENCY_FAILBACK_MIN_PRIMARY_SCORE:-60}"
 EMERGENCY_FAILBACK_MIN_BACKUP_TIME="${EMERGENCY_FAILBACK_MIN_BACKUP_TIME:-1800}"
 EMERGENCY_FAILBACK_COOLDOWN="${EMERGENCY_FAILBACK_COOLDOWN:-3600}"
 WAN_QUALITY_PROM_MAX_AGE="${WAN_QUALITY_PROM_MAX_AGE:-300}"
 
 # v4.8.0: Runtime state for emergency failback (not persisted — resets on restart)
-backup_degraded_streak=0            # Consecutive checks with backup DNS > threshold
+backup_degraded_streak=0            # Consecutive FRESH readings with backup DNS > threshold
+backup_degraded_last_mtime=0        # mtime of the last counted wan_quality.prom (prevents double counting)
 last_emergency_failback_mono=0      # Monotonic timestamp of last emergency failback
 
 # v4.10.0: Last-Resort failover state + config (Followup 25.04.2026 — Quota-blocked safety net)
@@ -472,8 +473,22 @@ is_emergency_failback_needed() {
     fi
 
     if [[ $backup_dns_ms -gt $EMERGENCY_FAILBACK_DNS_THRESHOLD_MS ]]; then
-        backup_degraded_streak=$((backup_degraded_streak + 1))
-        log_info "Backup end-to-end degraded: $BACKUP_IFACE DNS=${backup_dns_ms}ms > ${EMERGENCY_FAILBACK_DNS_THRESHOLD_MS}ms (streak=$backup_degraded_streak/$EMERGENCY_FAILBACK_DEGRADED_CHECKS)"
+        # Only count if the collector actually wrote since the last counted
+        # sample. This check runs every CHECK_INTERVAL (15s) but wan_quality.prom
+        # is rewritten roughly every 36-52s — without this guard the same reading
+        # counted up to four times as "consecutive", and a single outlier could
+        # reach the threshold on its own.
+        local prom_file prom_mtime
+        prom_file="${WAN_QUALITY_PROM_FILE:-/var/lib/node_exporter/textfile_collector/wan_quality.prom}"
+        prom_mtime=$(stat -c %Y "$prom_file" 2>/dev/null || echo 0)
+
+        if [[ "$prom_mtime" == "$backup_degraded_last_mtime" ]]; then
+            log_debug "Backup end-to-end degraded, but reading unchanged (mtime=$prom_mtime) — streak stays at $backup_degraded_streak"
+        else
+            backup_degraded_last_mtime="$prom_mtime"
+            backup_degraded_streak=$((backup_degraded_streak + 1))
+            log_info "Backup end-to-end degraded: $BACKUP_IFACE DNS=${backup_dns_ms}ms > ${EMERGENCY_FAILBACK_DNS_THRESHOLD_MS}ms (streak=$backup_degraded_streak/$EMERGENCY_FAILBACK_DEGRADED_CHECKS fresh readings)"
+        fi
     else
         if [[ $backup_degraded_streak -gt 0 ]]; then
             log_debug "Backup DNS recovered ($BACKUP_IFACE=${backup_dns_ms}ms) — resetting degraded streak from $backup_degraded_streak"
@@ -687,6 +702,15 @@ process_instant_failover_request() {
     if [[ $eth0_score -le $BOTH_DEGRADED_THRESHOLD ]] && [[ $lte0_score -le $BOTH_DEGRADED_THRESHOLD ]]; then
         log_warning "Both interfaces degraded during instant event (eth0=$eth0_score, lte0=$lte0_score) - maintaining current WAN"
         handle_both_interfaces_degraded "$eth0_score" "$lte0_score"
+        return 0
+    fi
+
+    # Every branch below switches primary -> backup. If we are already on backup,
+    # running the transaction again rewrites last_failover_to_backup and restarts
+    # MIN_BACKUP_TIME from zero. Deliberately placed AFTER edge case 1 so the
+    # both-degraded alert still fires while on backup.
+    if [[ "$current_wan" != "primary" ]]; then
+        log_info "Instant failover ignored: already running on backup (current_wan=$current_wan)"
         return 0
     fi
 
@@ -1227,6 +1251,48 @@ export_current_metrics() {
 }
 
 # ============================================================================
+# STATE NORMALISATION
+# ============================================================================
+
+# Translate the contents of the active_wan state file into the vocabulary that
+# current_wan and every decision function actually use ("primary"/"backup").
+#
+# Needed because the write and read sides speak different languages:
+# perform_failover writes interface names (eth0/lte0), because route-guardian,
+# routing.sh, the metrics collector and the shell aliases all expect exactly
+# that. The restart path, however, loaded the value verbatim into current_wan,
+# where every guard compares against "primary"/"backup" — a state that today is
+# only hidden by the RuntimeDirectory wipe on restart. Set
+# RuntimeDirectoryPreserve=restart and failback goes silently dead.
+#
+# Unknown contents are not guessed but decided against the kernel routing table,
+# the same ground truth the init branch uses.
+#
+# NOTE: called via $(...) — every log line must go to stderr.
+#
+# Args:  $1 = raw file contents
+# Echo:  "primary" or "backup"
+normalize_active_wan_state() {
+    local raw="${1:-}"
+
+    case "$raw" in
+        "$PRIMARY_IFACE"|primary) echo "primary"; return 0 ;;
+        "$BACKUP_IFACE"|backup)   echo "backup";  return 0 ;;
+    esac
+
+    local actual_dev
+    actual_dev=$(ip route get 8.8.8.8 2>/dev/null | grep -o "dev [^ ]*" | awk '{print $2}')
+    if [[ "$actual_dev" == "${BACKUP_IFACE:-lte0}" ]]; then
+        log_warning "active_wan unusable ('$raw') — resolved from routing: backup (via $actual_dev)" >&2
+        echo "backup"
+    else
+        log_warning "active_wan unusable ('$raw') — resolved from routing: primary (via ${actual_dev:-unknown})" >&2
+        echo "primary"
+    fi
+    return 0
+}
+
+# ============================================================================
 # MONITORING LOOP
 # ============================================================================
 
@@ -1278,7 +1344,7 @@ main() {
     else
         # v4.6.1 FIX M7: Do NOT use local - must update GLOBAL current_wan variable
         # Previous: `local current_wan` shadowed the global (line 270), causing wrong state after restart
-        current_wan=$(load_state "active_wan" "primary")
+        current_wan=$(normalize_active_wan_state "$(load_state "active_wan" "primary")")
         log_info "Preserved active_wan state: $current_wan (from previous run)"
     fi
 

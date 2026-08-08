@@ -19,9 +19,19 @@ readonly DEFAULT_DNS_SERVERS=("8.8.8.8" "1.1.1.1")
 readonly DEFAULT_DNS_TEST_DOMAINS=("google.com" "cloudflare.com")
 
 # Network test timeouts
-readonly PING_TIMEOUT=2
-readonly DNS_TIMEOUT=3
-readonly HTTP_TIMEOUT=5
+#
+# Assignable, not readonly: the units pass failover.conf through EnvironmentFile,
+# so these arrive as environment variables before the script runs. A readonly
+# declaration here silently overwrote them — set PING_TIMEOUT=7 in your config and
+# the daemon still used 2, with no warning anywhere.
+#
+# PING_TIMEOUT is a multiplier, not just a wrapper: measure_packet_loss caps at
+# PING_TIMEOUT * count, measure_path_quality at samples + PING_TIMEOUT * 2. Raising
+# it pushes the metrics collector towards its 30 s subprocess budget — see the
+# comment above measure_path_quality before you increase it.
+PING_TIMEOUT="${PING_TIMEOUT:-2}"
+DNS_TIMEOUT="${DNS_TIMEOUT:-3}"
+HTTP_TIMEOUT="${HTTP_TIMEOUT:-5}"
 
 # ============================================================================
 # MODULE MAP — 32 Funktionen in 5 Gruppen
@@ -650,25 +660,39 @@ get_interface_latency() {
 # Fallback: measure_packet_loss() if metric unavailable
 get_interface_packet_loss() {
     local interface="$1"
-    local prom_file="/var/lib/node_exporter/textfile_collector/wan_quality.prom"
+    # WAN_QUALITY_PROM_FILE override exists for tests.
+    local prom_file="${WAN_QUALITY_PROM_FILE:-/var/lib/node_exporter/textfile_collector/wan_quality.prom}"
+    local max_age="${WAN_QUALITY_PROM_MAX_AGE:-300}"
 
     # Try to read from Prometheus metrics first
     if [[ -f "$prom_file" ]]; then
-        local packet_loss
-        packet_loss=$(grep "wan_packet_loss_percent{interface=\"$interface\"" "$prom_file" | awk '{print $2}')
+        # Age check, same as _end_to_end_penalty in performance.sh. This value
+        # feeds is_critical_packet_loss, which bypasses FAILURE_THRESHOLD and
+        # fails over immediately. Without it, a frozen collector value keeps
+        # triggering instant failovers long after the link has recovered.
+        local mtime now age
+        mtime=$(stat -c %Y "$prom_file" 2>/dev/null || echo 0)
+        now=$(date +%s)
+        age=$((now - mtime))
 
-        if [[ -n "$packet_loss" ]] && is_numeric "$packet_loss"; then
-            log "DEBUG" "Packet loss for $interface from Prometheus: ${packet_loss}%"
-            echo "$packet_loss"
-            return 0
+        if [[ $age -gt $max_age ]]; then
+            log "DEBUG" "wan_quality.prom stale (${age}s > ${max_age}s) for $interface, using live measurement"
         else
+            local packet_loss
+            packet_loss=$(grep "wan_packet_loss_percent{interface=\"$interface\"" "$prom_file" | awk '{print $2}')
+
+            if [[ -n "$packet_loss" ]] && is_numeric "$packet_loss"; then
+                log "DEBUG" "Packet loss for $interface from Prometheus: ${packet_loss}%"
+                echo "$packet_loss"
+                return 0
+            fi
             log "DEBUG" "No valid Prometheus packet loss for $interface, using live measurement"
         fi
     else
         log "DEBUG" "Prometheus metrics file not found, using live measurement"
     fi
 
-    # Fallback to live measurement
+    # Fallback to live measurement (ping -c 10 without -i, ~9 s wall clock)
     measure_packet_loss "$interface"
 }
 

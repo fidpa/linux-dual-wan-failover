@@ -5,6 +5,100 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-08-08
+
+Four processes mutate the same routing table, and until now nothing actually
+stopped them from doing it at the same time. The `failover-in-progress` marker
+looked like it did — route-guardian checks it and skips its cycle — but the check
+happens once, at the top, and the guardian keeps changing routes for the rest of
+that cycle. A failover starting a few milliseconds after the check runs entirely
+inside the guardian's window, and the guardian then restores the old metric or
+removes the new route as a duplicate, working from state it read before the swap.
+
+This release adds a real `flock` underneath the marker, and fixes three latent
+bugs found while auditing the same code paths — latent in the precise sense that
+each one is currently masked by an unrelated implementation detail, and would
+start firing the moment that detail changed.
+
+None of this was prompted by an incident. It came out of a review of the failover
+implementation, which is worth saying plainly: the marker had been described in
+this project's own documentation as sufficient, with an argument
+(`docs/explanation/state-file-ownership.md`) that was internally consistent and
+still wrong. It reasoned about contention over the *file*, where the contention
+is over the *routing table*.
+
+### Added
+
+- **A real mutual-exclusion lock, `/run/failover-route.lock`.** Held with `flock`
+  on a fixed descriptor. The orchestrator holds it across its whole route
+  transaction; route-guardian and the nmcli emergency path take it around each
+  `ip route` call. The guardian skips its repair rather than waiting when it
+  cannot get the lock.
+
+  The marker file is deliberately kept. It still does the 30-second settle window
+  against NetworkManager DHCP stragglers and still carries the failover event id
+  that `trace-failover` correlates on. The `flock` is the fine-grained net
+  underneath it, not a replacement — and unlike the marker it needs no stale
+  detection, because the kernel releases it when the holder dies.
+
+  Two constraints shaped the implementation and are stated as rules in the code:
+  regions contain no forks, because `flock` lives on the open file description
+  and a `send_alert … &` child inherits it; and delete-then-re-add sits inside one
+  region, because locking only the add would let the lock change hands in between
+  and leave an interface with no default route at all.
+
+### Fixed
+
+- **`active_wan` is translated on read.** The file holds interface names
+  (`eth0`/`lte0`) because route-guardian, `routing.sh`, the metrics collector and
+  the shell aliases all expect them. The restart path loaded that value verbatim
+  into `current_wan`, where every guard compares against `primary`/`backup`.
+  Currently harmless only because `RuntimeDirectory=` wipes the state directory on
+  every restart, so the detection branch runs instead — set
+  `RuntimeDirectoryPreserve=restart`, an otherwise sensible change, and failback
+  plus every manual action go silently dead.
+- **An instant failover no longer fires while already on backup.** Every branch of
+  the USR1 handler switches primary → backup unconditionally. A second primary
+  event after the 60 s instant cooldown re-ran the whole transaction and rewrote
+  `last_failover_to_backup`, restarting `MIN_BACKUP_TIME` from zero. The guard
+  sits after the both-degraded branch so that alert still fires while on backup.
+- **Stale packet loss no longer triggers instant failovers.** `get_interface_packet_loss`
+  read `wan_quality.prom` with no age check, unlike every other consumer of that
+  file. The value feeds `is_critical_packet_loss`, which bypasses
+  `FAILURE_THRESHOLD` — so a frozen collector reading kept forcing immediate
+  failovers long after the link had recovered. It now honours
+  `WAN_QUALITY_PROM_MAX_AGE` and falls back to live measurement.
+- **The emergency path checks ownership before removing the marker.** Its success
+  path did; its failure path removed whatever marker happened to be there,
+  re-arming route-guardian in the middle of somebody else's transaction.
+- **Route repair is rate-limited per interface.** One shared marker meant that
+  when both default routes went missing at once — a NetworkManager restart does
+  this — repairing the primary locked out repairing the backup for 60 seconds,
+  which is exactly the window where the backup path matters.
+
+### Changed
+
+- **`EMERGENCY_FAILBACK_DEGRADED_CHECKS` counts readings, not rounds; default
+  20 → 6.** The counter advanced once per orchestrator cycle (15 s) while the DNS
+  value it reads is refreshed every ~36–52 s, so the same sample was counted up to
+  four times and a single outlier could reach the threshold on its own. The 20
+  from 0.6.0 was a workaround for exactly this, chosen to approximate six
+  independent samples. The counter now advances only when `wan_quality.prom` has
+  actually been rewritten, so the value means what it says. Both defaults encode
+  the same intent — roughly five minutes of evidence.
+- **Network timeouts are assignable instead of `readonly`.** `PING_TIMEOUT`,
+  `DNS_TIMEOUT` and `HTTP_TIMEOUT` were declared `readonly` in `network.sh`, which
+  silently overwrote anything the operator set: the units pass `failover.conf`
+  through `EnvironmentFile`, so those values arrive as environment variables
+  before the script runs. Setting `PING_TIMEOUT=7` in your config had no effect
+  and produced no warning. Defaults are unchanged (2/3/5), so runtime behaviour is
+  identical — the setting simply works now.
+
+  Note before raising it: `PING_TIMEOUT` acts as a multiplier, not just a wrapper.
+  `measure_packet_loss` caps at `PING_TIMEOUT × count` and `measure_path_quality`
+  at `samples + PING_TIMEOUT × 2`, both of which push against the metrics
+  collector's 30 s subprocess budget.
+
 ## [0.7.1] — 2026-08-03
 
 The orchestrator had been announcing `Failover Monitor v0.1.1` on every start
@@ -735,7 +829,11 @@ stack that has been running in production since 2025-08.
   `ping`.
 - **CI**: `shellcheck`, `bashate`, `bats`, `ruff`.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.4.0...v0.4.1

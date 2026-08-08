@@ -43,7 +43,15 @@ ls -la /run/failover-in-progress.lock
 cat /run/failover-in-progress.lock          # PID_TIMESTAMP — also the Event-ID
 # If the file exists and the PID inside is dead → stale; remove it:
 sudo rm -f /run/failover-in-progress.lock
+
+# The second lock is a real flock and needs no cleanup — the kernel drops it
+# when the holder dies. Check who holds it instead of deleting it:
+sudo fuser -v /run/failover-route.lock       # no output = nobody holds it
 ```
+
+If `fuser` shows a holder that is not currently changing routes, that is a bug
+worth reporting: every region that takes this lock is a handful of `ip route`
+calls and must release it within milliseconds.
 
 ## Score doesn't reflect reality
 

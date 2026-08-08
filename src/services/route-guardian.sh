@@ -42,7 +42,25 @@ if [[ -z "${LOG_FILE:-}" ]]; then
 fi
 
 readonly STATE_DIR="/var/lib/linux-dual-wan-failover/route-guardian"
-readonly REPAIR_LOCKFILE="${STATE_DIR}/route-guardian-repair.lock"
+
+# Rate-limit marker per interface. A single shared marker meant that if both
+# default routes went missing at once — a NetworkManager restart does this — the
+# guardian repaired the primary and then locked itself out of repairing the
+# backup for 60 s, which is exactly the window where the backup path is needed.
+readonly REPAIR_LOCKFILE_PREFIX="${STATE_DIR}/route-guardian-repair"
+readonly REPAIR_RATE_LIMIT_SECONDS=60
+
+# Real mutual exclusion against the orchestrator (routing.sh). The marker file
+# /run/failover-in-progress.lock only pauses whole cycles and is checked once at
+# the top — a failover fits entirely between that check and the mutation below.
+#
+# RULE: do not fork between acquire and release. flock lives on the open file
+# description; a child started with '&' (the Mattermost curl in send_alert and
+# send_recovery_alert, for instance) inherits it and keeps holding the lock.
+# The regions are therefore deliberately narrow and contain no 'sleep'.
+readonly ROUTE_LOCK_FILE="/run/failover-route.lock"
+readonly ROUTE_LOCK_FD=201
+readonly ROUTE_LOCK_WAIT=5
 readonly LTE_AVAILABLE_STATE="${STATE_DIR}/backup_available.state"
 
 # Optional secondary subnets / source IPs (only used for diagnostic output and
@@ -578,49 +596,117 @@ repair_local_route() {
 }
 
 # Add missing route with rate limiting
+# Take the exclusive route lock against the orchestrator. Returns 1 if it could
+# not be had; the caller then skips the mutation entirely.
+# shellcheck disable=SC2120  # wait time is optional, defaults to ROUTE_LOCK_WAIT
+_acquire_route_lock() {
+    local wait_s="${1:-$ROUTE_LOCK_WAIT}"
+
+    if ! eval "exec ${ROUTE_LOCK_FD}>\"\$ROUTE_LOCK_FILE\""; then
+        log_message "ERROR" "LOCK" "Cannot open route lock ($ROUTE_LOCK_FILE)"
+        return 1
+    fi
+
+    if ! flock -w "$wait_s" -x "$ROUTE_LOCK_FD"; then
+        eval "exec ${ROUTE_LOCK_FD}>&-"
+        return 1
+    fi
+
+    return 0
+}
+
+# Must run on EVERY exit path of the region — a leaked descriptor holds the lock
+# until the next acquire and blocks the orchestrator in the meantime.
+_release_route_lock() {
+    flock -u "$ROUTE_LOCK_FD" 2>/dev/null || true
+    eval "exec ${ROUTE_LOCK_FD}>&-" 2>/dev/null || true
+    return 0
+}
+
+# Rate-limit marker path for one interface
+_repair_marker() {
+    echo "${REPAIR_LOCKFILE_PREFIX}-${1}.lock"
+}
+
+# Returns 0 when the interface is still rate-limited.
+_repair_rate_limited() {
+    local interface="$1"
+    local marker
+    marker="$(_repair_marker "$interface")"
+
+    [[ -f "$marker" ]] || return 1
+
+    local lock_time lock_age
+    lock_time=$(stat -c %Y "$marker" 2>/dev/null || echo 0)
+    lock_age=$(( $(date +%s) - ${lock_time:-0} ))
+
+    if [[ $lock_age -lt $REPAIR_RATE_LIMIT_SECONDS ]]; then
+        log_message "INFO" "REPAIR" "Rate limit active for $interface - skipping repair (${lock_age}s since last repair)"
+        return 0
+    fi
+    return 1
+}
+
+# Add a missing default route, rate limited per interface.
+#
+# $4 = "true" when the caller already holds the route lock. Callers that delete
+# routes themselves before repairing must hold it across both steps — otherwise
+# the lock could change hands in between and leave the interface with no default
+# route at all.
 add_missing_route() {
     local interface="$1"
     local gateway="$2"
     local metric="$3"
+    local lock_held="${4:-false}"
 
-    # Rate limiting check
-    if [[ -f "$REPAIR_LOCKFILE" ]]; then
-        local current_time
-        current_time=$(date +%s)
-        local lock_time
-        lock_time=$(stat -c %Y "$REPAIR_LOCKFILE" 2>/dev/null || echo 0)
-        local lock_age
-        lock_age=$(( ${current_time:-0} - ${lock_time:-0} ))
-        if [[ $lock_age -lt 60 ]]; then
-            log_message "INFO" "REPAIR" "Rate limit active - skipping repair (${lock_age}s since last repair)"
+    if _repair_rate_limited "$interface"; then
+        return 1
+    fi
+
+    # Verify the gateway is reachable before installing the route. Skipped when
+    # the caller holds the lock: it has already run this check, and the ping
+    # would stretch the lock region by seconds.
+    if [[ "$lock_held" != "true" ]]; then
+        if ! test_gateway_reachable "$gateway" "$interface"; then
+            log_message "ERROR" "REPAIR" "Skipping route addition - gateway $gateway unreachable via $interface"
+            increment_failure_count
+            return 1
+        fi
+
+        if ! _acquire_route_lock; then
+            log_message "INFO" "REPAIR" "Route lock busy (failover in progress) - skipping repair of $interface"
             return 1
         fi
     fi
 
-    # Verify the gateway is reachable before installing the route.
-    if ! test_gateway_reachable "$gateway" "$interface"; then
-        log_message "ERROR" "REPAIR" "Skipping route addition - gateway $gateway unreachable via $interface"
-        increment_failure_count
-        return 1
-    fi
-
     # Try to add the route
     log_message "INFO" "REPAIR" "Adding missing route: default via $gateway dev $interface metric $metric"
+    local add_ok=1
     if ip route add default via "$gateway" dev "$interface" metric "$metric" 2>/dev/null; then
+        add_ok=0
+    fi
+
+    # Release here in ALL cases, including when the caller took the lock:
+    # everything below forks (send_recovery_alert starts the Mattermost curl with
+    # '&') and would otherwise carry the descriptor out of the region. The
+    # caller's own release afterwards is a no-op.
+    _release_route_lock
+
+    if [[ $add_ok -eq 0 ]]; then
         log_message "SUCCESS" "REPAIR" "Successfully added route for $interface"
 
         # v3.1.0: Use smart recovery alert (suppresses short downtimes)
         local event_type="${interface^^}_ROUTE_MISSING"  # DSL → DSL_ROUTE_MISSING
         send_recovery_alert "$event_type" "✅ Route successfully restored" "Interface: $interface, Gateway: $gateway, Metric: $metric"
 
-        touch "$REPAIR_LOCKFILE"
+        touch "$(_repair_marker "$interface")"
         increment_success_count
         return 0
-    else
-        log_message "WARNING" "REPAIR" "Failed to add route for $interface - may already exist"
-        increment_failure_count
-        return 1
     fi
+
+    log_message "WARNING" "REPAIR" "Failed to add route for $interface - may already exist"
+    increment_failure_count
+    return 1
 }
 
 # ============================================================================
@@ -835,14 +921,31 @@ cleanup_conflicting_routes() {
                 local interface
                 interface=$(grep -o "dev [^ ]*" <<< "$lte_route_found" | awk '{print $2}')
 
-                if ip route del default via "$gateway" dev "$interface" metric 100 2>/dev/null; then
+                # Delete and re-add belong in ONE lock region; the alerts fire
+                # afterwards because they start curl with '&' and would inherit
+                # the lock descriptor.
+                local lock_ok=1 del_ok=1 add_ok=1 gw_reachable=1
+                if _acquire_route_lock; then
+                    lock_ok=0
+                    if ip route del default via "$gateway" dev "$interface" metric 100 2>/dev/null; then
+                        del_ok=0
+                        if test_gateway_reachable "$gateway" "$interface"; then
+                            gw_reachable=0
+                            ip route add default via "$gateway" dev "$interface" metric 200 2>/dev/null && add_ok=0
+                        fi
+                    fi
+                    _release_route_lock
+                fi
+
+                if [[ $lock_ok -ne 0 ]]; then
+                    log_message "INFO" "CLEANUP" "Route lock busy (failover in progress) - skipping metric cleanup"
+                elif [[ $del_ok -eq 0 ]]; then
                     log_message "SUCCESS" "CLEANUP" "Removed incorrect LTE route: $lte_route_found"
                     send_alert "ROUTE_CLEANUP" "✅ Metric conflict resolved" "Removed LTE ($LTE_INTERFACE) route with wrong metric 100" &
                     increment_success_count
 
-                    # Re-add LTE route with correct metric 200
-                    if test_gateway_reachable "$gateway" "$interface"; then
-                        if ip route add default via "$gateway" dev "$interface" metric 200 2>/dev/null; then
+                    if [[ $gw_reachable -eq 0 ]]; then
+                        if [[ $add_ok -eq 0 ]]; then
                             log_message "SUCCESS" "CLEANUP" "Re-added LTE route with correct metric 200"
                             send_alert "ROUTE_RECOVERED" "✅ LTE ($LTE_INTERFACE) route corrected" "Metric: 100 → 200" &
                         else
@@ -912,15 +1015,27 @@ cleanup_interface_duplicate_routes() {
                 local metric
                 metric=$(grep -o "metric [0-9]*" <<< "$route" | awk '{print $2}')
 
-                if [[ -n "$metric" ]]; then
-                    if ip route del default via "$gateway" dev "$interface" metric "$metric" 2>/dev/null; then
-                        log_message "SUCCESS" "CLEANUP" "Removed duplicate route: $route"
+                # Deleting default routes must not overlap the orchestrator's
+                # metric swap. Region kept tight around the ip command; the alert
+                # forks and therefore fires after the release.
+                local del_ok=1
+                if _acquire_route_lock; then
+                    if [[ -n "$metric" ]]; then
+                        ip route del default via "$gateway" dev "$interface" metric "$metric" 2>/dev/null && del_ok=0
+                    else
+                        ip route del default via "$gateway" dev "$interface" 2>/dev/null && del_ok=0
+                    fi
+                    _release_route_lock
+                else
+                    log_message "INFO" "CLEANUP" "Route lock busy (failover in progress) - skipping duplicate cleanup"
+                fi
+
+                if [[ $del_ok -eq 0 ]]; then
+                    log_message "SUCCESS" "CLEANUP" "Removed duplicate route: $route"
+                    if [[ -n "$metric" ]]; then
                         send_alert "ROUTE_CLEANUP" "✅ Duplicate route removed" "Interface: $interface
 Removed: metric $metric" &
-                    fi
-                else
-                    if ip route del default via "$gateway" dev "$interface" 2>/dev/null; then
-                        log_message "SUCCESS" "CLEANUP" "Removed duplicate route: $route"
+                    else
                         send_alert "ROUTE_CLEANUP" "✅ Duplicate route removed" "Interface: $interface" &
                     fi
                 fi
@@ -1274,11 +1389,20 @@ monitor_default_routes() {
             send_alert "DSL_ROUTE_MISSING" "🔴 DSL (eth0/WAN) route needs repair" "Expected metric: $expected_metric, Interface: $DSL_INTERFACE" &
             # Only repair if gateway is reachable
             if test_gateway_reachable "$DSL_GATEWAY" "$DSL_INTERFACE"; then
-                # Remove any existing DSL default routes with wrong metric
-                while ip route del default dev "$DSL_INTERFACE" 2>/dev/null; do
-                    :
-                done
-                add_missing_route "$DSL_INTERFACE" "$DSL_GATEWAY" "$expected_metric"
+                # Delete and re-add must sit in ONE lock region. Otherwise the
+                # lock could pass to the orchestrator in between and the primary
+                # would be left without any default route until the next cycle.
+                # Hence the skip decision happens before the delete, not after.
+                if _acquire_route_lock; then
+                    # Remove any existing DSL default routes with wrong metric
+                    while ip route del default dev "$DSL_INTERFACE" 2>/dev/null; do
+                        :
+                    done
+                    add_missing_route "$DSL_INTERFACE" "$DSL_GATEWAY" "$expected_metric" "true"
+                    _release_route_lock
+                else
+                    log_message "INFO" "DSL" "Route lock busy (failover in progress) - skipping primary repair"
+                fi
             fi
         fi
     fi

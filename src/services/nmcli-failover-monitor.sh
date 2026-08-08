@@ -19,6 +19,14 @@ PRIMARY_IFACE="${PRIMARY_IFACE:-eth0}"
 BACKUP_IFACE="${BACKUP_IFACE:-lte0}"
 BACKUP_GATEWAY="${BACKUP_GATEWAY:-192.0.2.10}"
 
+# Route lock. Path and descriptor match routing.sh and route-guardian.sh —
+# hard-coded rather than shared because this script sources neither of them.
+# /run rather than /tmp: the other two units run with PrivateTmp=yes.
+# shellcheck disable=SC2034  # used inside the eval'd exec redirect below
+ROUTE_LOCK_FILE="/run/failover-route.lock"
+ROUTE_LOCK_FD=201
+ROUTE_LOCK_WAIT=5
+
 # ---- Paths ------------------------------------------------------------------
 
 SCRIPT_NAME="$(basename "$0")"
@@ -192,6 +200,23 @@ trigger_instant_failover() {
             "REASON=signal_failed" \
             "LOCKFILE_ID=${emergency_id}"
 
+        # Route lock: best effort, not real exclusion. This block only runs when
+        # the orchestrator is provably dead (PID file and pgrep both failed), so
+        # there is nobody left to exclude. The short wait only covers a running
+        # route-guardian repair. The emergency path must never starve.
+        #
+        # RULE: no forking between acquire and release (flock lives on the open
+        # file description, a child inherits it).
+        local _emergency_lock=1
+        if eval "exec ${ROUTE_LOCK_FD}>\"\$ROUTE_LOCK_FILE\"" 2>/dev/null; then
+            if flock -w "$ROUTE_LOCK_WAIT" -x "$ROUTE_LOCK_FD" 2>/dev/null; then
+                _emergency_lock=0
+            else
+                log_warning "Route lock not acquired (${ROUTE_LOCK_WAIT}s) - emergency failover proceeds anyway"
+                eval "exec ${ROUTE_LOCK_FD}>&-" 2>/dev/null || true
+            fi
+        fi
+
         # Remove the primary default route (interface-specific for safety).
         # The NM-managed backup route (metric 200) usually already exists and
         # takes over as soon as the primary route is gone.
@@ -209,6 +234,14 @@ trigger_instant_failover() {
             emergency_route_ok=1
         elif ip route add default via "$BACKUP_GATEWAY" dev "$BACKUP_IFACE" metric 200 2>/dev/null; then
             emergency_route_ok=1
+        fi
+
+        # Release before either branch below: the success path starts a
+        # '( sleep 30 ... ) &' subshell that would inherit the descriptor and
+        # hold the lock for the full settle window.
+        if [[ $_emergency_lock -eq 0 ]]; then
+            flock -u "$ROUTE_LOCK_FD" 2>/dev/null || true
+            eval "exec ${ROUTE_LOCK_FD}>&-" 2>/dev/null || true
         fi
 
         if [[ $emergency_route_ok -eq 1 ]]; then
@@ -243,7 +276,16 @@ trigger_instant_failover() {
                 "STATUS=failed" \
                 "ACTION_REQUIRED=manual"
 
-            rm -f /run/failover-in-progress.lock 2>/dev/null || true
+            # Ownership check, same as the success path above: an unconditional
+            # rm would also delete a marker that another failover path has since
+            # created, re-arming route-guardian in the middle of that transaction.
+            local failed_lockfile_id
+            failed_lockfile_id=$(cat /run/failover-in-progress.lock 2>/dev/null)
+            if [[ "$failed_lockfile_id" == "$emergency_id" ]]; then
+                rm -f /run/failover-in-progress.lock 2>/dev/null || true
+            else
+                log_warning "Lockfile owned by a different failover ($failed_lockfile_id) - skipping cleanup"
+            fi
         fi
     fi
     return 0

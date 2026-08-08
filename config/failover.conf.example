@@ -137,15 +137,18 @@ EMERGENCY_FAILBACK_COOLDOWN=3600  # 60 min cooldown for emergency failback
 # link that was still broken. Raise the floor rather than the DNS threshold —
 # a backup that is merely slow is still carrying traffic.
 EMERGENCY_FAILBACK_DNS_THRESHOLD_MS=800  # backup DNS time above which it counts as degraded
-EMERGENCY_FAILBACK_DEGRADED_CHECKS=20    # consecutive degraded checks required (see note below)
+EMERGENCY_FAILBACK_DEGRADED_CHECKS=6     # consecutive FRESH readings required (see note below)
 EMERGENCY_FAILBACK_MIN_PRIMARY_SCORE=60  # primary must be at least this healthy
 EMERGENCY_FAILBACK_MIN_BACKUP_TIME=1800  # 30 min on backup before the escape hatch opens
 #
-# NOTE on DEGRADED_CHECKS: the counter ticks once per CHECK_INTERVAL, but the
-# DNS value it reads is refreshed by failover-metrics-collector on its own
-# (slower) cycle. Check your collector's actual cadence — if it writes every
-# ~50 s and CHECK_INTERVAL is 15 s, then 20 checks (300 s) are only ~6 truly
-# independent samples, and 6 checks would have been fewer than 2.
+# NOTE on DEGRADED_CHECKS: this now counts readings, not rounds. The orchestrator
+# ticks once per CHECK_INTERVAL, but the DNS value it reads is refreshed by
+# failover-metrics-collector on its own, slower cycle — so the counter used to
+# increment several times on the very same sample, and a single outlier could
+# reach the threshold by itself. Since the counter only advances when
+# wan_quality.prom has actually been rewritten, the value is a count of
+# independent measurements: 6 readings at a ~50 s collector cadence is ~300 s of
+# evidence. Adjust it against your collector's cadence, not against CHECK_INTERVAL.
 
 # ============================================================================
 # Failback gating
