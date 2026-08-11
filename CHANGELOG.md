@@ -5,6 +5,23 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-08-11
+
+Ten scripts had lost their executable bit — a mode-only change, no content
+diff. `install.sh` is meant to be run directly (`sudo ./install.sh`, per the
+README) and would have failed with "Permission denied" on a fresh clone of the
+affected commit.
+
+### Fixed
+
+- **Restored `chmod 755`** on `install.sh`, the four systemd-invoked service
+  scripts (`failover-monitor.sh`, `nmcli-failover-monitor.sh`,
+  `route-guardian.sh`, `failover-monitor-health-check.sh`),
+  `failover-metrics-collector.py`,
+  `plugins/quota-providers/netgear-lm1200/collect-quota.py`, and the three
+  `tests/mocks/{ip,nmcli,ping}` PATH stand-ins. Confirmed via `git diff
+  --summary`: `mode change 100644 => 100755` only, no content change.
+
 ## [0.8.0] — 2026-08-08
 
 Four processes mutate the same routing table, and until now nothing actually
