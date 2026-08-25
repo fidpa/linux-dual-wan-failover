@@ -367,9 +367,10 @@ validate_environment() {
 # UTILITY
 # ============================================================================
 
-# Check if value is numeric
+# Check if value is numeric (integer or float, trailing dot accepted)
+# SSOT — network.sh nutzt diese Definition via export -f (keine eigene Kopie mehr)
 is_numeric() {
-    [[ $1 =~ ^[0-9]+(\.[0-9]+)?$ ]]
+    [[ "$1" =~ ^[0-9]+\.?[0-9]*$ ]]
 }
 
 # Get current timestamp

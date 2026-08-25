@@ -593,9 +593,13 @@ is_failback_needed() {
     fi
 
     # v4.3.0: Enforce minimum backup time (30 minutes on LTE after failover)
-    local failover_to_backup_time=0
+    local failover_to_backup_time=""
     if [[ -f "$LAST_FAILOVER_TO_BACKUP_FILE" ]]; then
-        failover_to_backup_time=$(cat "$LAST_FAILOVER_TO_BACKUP_FILE" 2>/dev/null || echo "0")
+        failover_to_backup_time=$(cat "$LAST_FAILOVER_TO_BACKUP_FILE" 2>/dev/null || echo "")
+    fi
+    if [[ ! "$failover_to_backup_time" =~ ^[0-9]+$ ]] || [[ "$failover_to_backup_time" -eq 0 ]]; then
+        log_debug "Failback blocked: backup-start timestamp unknown (state wiped by service restart?)"
+        return 1
     fi
 
     local current_time
@@ -676,13 +680,7 @@ Failback-Status: Warte auf Stability-Requirements." \
 # Process instant failover request (called from main loop, not signal handler)
 # v4.2.0 FIX: Cache invalidation for BOTH interfaces + improved edge-case logic
 process_instant_failover_request() {
-    # v4.2.0 ARCHITECTURE REVIEW FIX #1: Invalidate cache for BOTH interfaces before scoring
-    # Instant events can affect PRIMARY or BACKUP (e.g., "lte0 connected" event)
-    # Using cached backup score (up to 15s stale) could cause missed failovers or delayed failbacks
-    invalidate_cache "$PRIMARY_IFACE"
-    invalidate_cache "$BACKUP_IFACE"  # FIX: Also invalidate backup cache
-
-    # Get FRESH scores for BOTH interfaces (after cache invalidation)
+    # Get FRESH scores for BOTH interfaces
     local eth0_score
     eth0_score=$(calculate_interface_score "$PRIMARY_IFACE")
     local lte0_score
@@ -784,8 +782,6 @@ process_manual_action_request() {
         return 0
     fi
 
-    invalidate_cache "$PRIMARY_IFACE"
-    invalidate_cache "$BACKUP_IFACE"
     local primary_score backup_score
     primary_score=$(calculate_interface_score "$PRIMARY_IFACE")
     backup_score=$(calculate_interface_score "$BACKUP_IFACE")
@@ -1315,14 +1311,13 @@ main() {
     echo "$$" > "$PID_FILE"
     chmod 644 "$PID_FILE"  # Allow nmcli-failover-monitor to read for USR1 signal
 
-    # Initialize cache structures
-    init_cache_structures
-
     # Initialize state directory (defensive check for STATE_FILE)
-    [[ -n "${STATE_FILE:-}" ]] && {
+    if [[ -n "${STATE_FILE:-}" ]]; then
         mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
         chmod 755 "$(dirname "$STATE_FILE")" 2>/dev/null || true
-    } || log_warning "STATE_FILE not defined, skipping state directory init"
+    else
+        log_warning "STATE_FILE not defined, skipping state directory init"
+    fi
 
     # Initialise active_wan state file if missing.
     # RuntimeDirectory=wan-state clears STATE_FILE on every service restart, so
@@ -1419,11 +1414,6 @@ main() {
 
         # Check failover conditions
         check_failover_conditions
-
-        # Periodic cache cleanup (every 10 iterations)
-        if [[ $((iteration % 10)) -eq 0 ]]; then
-            cleanup_cache
-        fi
 
         # Performance-stats log removed: cache/event counters live inside
         # $(...) command-substitution subshells and were provably always zero.

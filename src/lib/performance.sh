@@ -13,22 +13,6 @@ set -uo pipefail  # Removed -e: Explicit error handling (Best Practice 2025)
 # PERFORMANCE CONFIGURATION
 # ============================================================================
 
-# Cache configuration
-readonly CACHE_TTL=15           # Cache valid for 15 seconds
-readonly CACHE_MAX_SIZE=100     # Maximum cache entries
-readonly PARALLEL_TIMEOUT=10    # Timeout for parallel tests
-
-# Cache storage (global scope for modular architecture)
-declare -gA ping_cache
-declare -gA cache_timestamps
-declare -gA dns_cache
-declare -gA gateway_cache
-
-# Performance counters
-cache_hits=0
-cache_misses=0
-parallel_tests=0
-
 # Event system performance metrics
 event_signal_latency=0
 event_signal_count=0
@@ -36,168 +20,39 @@ event_processing_time=0
 emergency_failover_time=0
 
 # ============================================================================
-# MODULE MAP — 24 Funktionen in 6 Gruppen
+# MODULE MAP — 17 Funktionen in 4 Gruppen
 # ============================================================================
 #
-# 1. CACHE — Init, Invalidation, Cleanup (→ Zeile 65)
-#    init_cache_structures()     Alle Caches + Zähler zurücksetzen
-#    is_cache_valid()            Cache-Entry gegen TTL prüfen
-#    get_cache_stats()           Hit-Rate und Entry-Count
-#    invalidate_cache()          Interface-spezifisch oder komplett leeren
-#    cleanup_cache()             Expired Entries (>60s) entfernen
-#    manage_cache_size()         Älteste 20% entfernen wenn > CACHE_MAX_SIZE
-#    get_interface_gateway()     Gateway-IP mit Cache-Layer (gw_<iface>)
-#
-# 2. CACHED TESTS — Ping mit TTL-Cache (→ Zeile 112)
-#    cached_ping()               Ping mit Cache-Lookup/Store
-#    perform_ping_test()         Tatsächlicher Ping mit Timeout
-#
-# 3. PARALLEL TESTING — Parallele Interface-Tests (→ Zeile 176)
-#    test_interfaces_parallel()  Primary + Backup parallel testen
-#    wait_for_processes()        PIDs mit Timeout abwarten
-#
-# 4. COMPREHENSIVE INTERFACE TESTS — Multi-Metrik Scoring (→ Zeile 270)
+# 1. INTERFACE TESTS — Multi-Metrik Scoring (→ Zeile 68)
 #    test_interface_comprehensive()  4 Tests → Gesamt-Score (0-100) + LTE-Bonus
 #    test_connectivity_score()       Ping zu CHECK_IPS → 0-25 Punkte
 #    test_dns_score()                DNS-Auflösung → 0-25 Punkte
 #    test_gateway_score()            Gateway-Ping → 0-25 Punkte
 #    test_http_score()               HTTP curl → 0-25 Punkte
+#    perform_ping_test()             Ping mit Timeout
+#    _end_to_end_penalty()           WAN-Quality-Prom-basierter Penalty (v4.8.0)
+#    _backup_quota_cap()             Backup-link Quota Cap
+#    _backup_quota_exhausted()       Quota-exhausted Check
 #
-# 5. EVENT PERFORMANCE METRICS — Signal-/Failover-Zeitmessung (→ Zeile 546)
+# 2. EVENT PERFORMANCE METRICS — Signal-/Failover-Zeitmessung (→ Zeile 412)
 #    record_event_signal_latency()    Signal-Latenz aufzeichnen
 #    record_event_processing_time()   Verarbeitungszeit aufzeichnen
 #    record_emergency_failover_time() Emergency-Failover-Dauer aufzeichnen
 #    get_event_performance_stats()    Durchschnitts-Statistiken
-#    get_performance_stats()          Cache + Event + Parallel Gesamtstatistik
+#    get_performance_stats()          Event Gesamtstatistik
 #
-# 6. METRICS EXPORT — Score-Berechnung und JSON-Export (→ Zeile 594)
+# 3. METRICS EXPORT — Score-Berechnung und JSON-Export (→ Zeile 453)
 #    calculate_interface_score()  test_interface_comprehensive + connection_scores
 #    export_metrics_json()        JSON-Metriken für failover-metrics-collector.py
 #
+# Cache-Framework entfernt: ~330 Zeilen die durch die Subshell-Architektur
+# ($(...) um calculate_interface_score) nie wirkten. Verifiziert im Review
+# (dauerhaft "0% hit rate (0/0), 0 entries").
 # ============================================================================
 
 # ============================================================================
-# CACHE — INIT, INVALIDATION, CLEANUP
+# PING TEST
 # ============================================================================
-
-# Initialize cache structures
-# NOTE (upstream review finding): these caches are effectively inert in
-# production. calculate_interface_score is only ever invoked via $(...)
-# command substitution — every write to ping_cache/dns_cache/cache_timestamps/
-# cache_hits happens in the subshell and is lost with it (verified live:
-# permanently "0% hit rate (0/0), 0 entries"). With CACHE_TTL (15s) ==
-# CHECK_INTERVAL (15s) the benefit would be minimal even if they worked.
-# Kept rather than invasively refactored — the score-to-stdout architecture
-# is deeply wired in; correctness is unaffected.
-init_cache_structures() {
-    ping_cache=()
-    cache_timestamps=()
-    dns_cache=()
-    gateway_cache=()
-
-    cache_hits=0
-    cache_misses=0
-    parallel_tests=0
-
-    log "DEBUG" "Cache structures initialized"
-}
-
-# Check if cache entry is valid
-is_cache_valid() {
-    local cache_key="$1"
-    local now="${2:-0}"
-
-    if [[ -n "${cache_timestamps[$cache_key]:-}" ]]; then
-        local cache_time="${cache_timestamps[$cache_key]:-0}"
-        local age
-        age=$((now - cache_time))
-        if [[ $age -lt $CACHE_TTL ]]; then
-            return 0
-        fi
-    fi
-
-    return 1
-}
-
-# Get cache statistics
-get_cache_stats() {
-    local total_requests
-    total_requests=$((cache_hits + cache_misses))
-    local hit_rate=0
-
-    if [[ $total_requests -gt 0 ]]; then
-        hit_rate=$((cache_hits * 100 / total_requests))
-    fi
-
-    echo "Cache: ${hit_rate}% hit rate (${cache_hits}/${total_requests}), ${#ping_cache[@]} entries"
-}
-
-# Get interface gateway with caching
-get_interface_gateway() {
-    local interface="$1"
-    local cache_key="gw_${interface}"
-    local now
-    now=$(get_timestamp)
-
-    # Check gateway cache
-    if is_cache_valid "$cache_key" "$now"; then
-        echo "${gateway_cache[$cache_key]}"
-        return 0
-    fi
-
-    # Get gateway from routing table
-    local gateway
-    gateway=$(ip route show dev "$interface" | grep default | awk '{print $3}' | head -1)
-
-    # Update cache
-    if [[ -n "$gateway" ]]; then
-        gateway_cache[$cache_key]="$gateway"
-        cache_timestamps[$cache_key]="$now"
-    fi
-
-    echo "$gateway"
-}
-
-# ============================================================================
-# CACHED TESTS
-# ============================================================================
-
-# Cached ping with TTL and performance tracking
-cached_ping() {
-    local target="$1"
-    local interface="$2"
-    # Sanitize IP addresses for bash array keys (replace dots with underscores)
-    local sanitized_target="${target//\./_}"
-    local cache_key="${interface}_${sanitized_target}"
-    local now
-    now=$(get_timestamp)
-
-    # Check cache validity
-    if is_cache_valid "$cache_key" "$now"; then
-        ((cache_hits++)) || true
-        log "DEBUG" "Cache hit for $cache_key"
-        echo "${ping_cache[$cache_key]}"
-        return 0
-    fi
-
-    # Cache miss - perform actual ping
-    ((cache_misses++)) || true
-    log "DEBUG" "Cache miss for $cache_key"
-
-    local result
-    result=$(perform_ping_test "$target" "$interface")
-    local exit_code=$?
-
-    # Update cache
-    ping_cache[$cache_key]="$result"
-    cache_timestamps[$cache_key]="$now"
-
-    # Prevent cache from growing too large
-    manage_cache_size
-
-    echo "$result"
-    return $exit_code
-}
 
 # Perform actual ping test with timeout and metrics
 perform_ping_test() {
@@ -221,99 +76,6 @@ perform_ping_test() {
         echo "failure"
         return 1
     fi
-}
-
-# ============================================================================
-# PARALLEL TESTING FRAMEWORK
-# ============================================================================
-
-# Test multiple interfaces in parallel for better performance
-test_interfaces_parallel() {
-    local primary_iface="${1:-$PRIMARY_IFACE}"
-    local backup_iface="${2:-$BACKUP_IFACE}"
-
-    local primary_result_file="/tmp/failover_primary_$$"
-    local backup_result_file="/tmp/failover_backup_$$"
-
-    ((parallel_tests++)) || true
-    log "DEBUG" "Starting parallel test #$parallel_tests"
-
-    # Start background tests
-    test_interface_comprehensive "$primary_iface" > "$primary_result_file" &
-    local primary_pid=$!
-
-    test_interface_comprehensive "$backup_iface" > "$backup_result_file" &
-    local backup_pid=$!
-
-    # Wait for completion with timeout
-    local wait_start
-    wait_start=$(get_timestamp)
-    local timed_out=0
-
-    if ! wait_for_processes "$primary_pid" "$backup_pid" "$PARALLEL_TIMEOUT"; then
-        log "WARNING" "Parallel tests timed out after ${PARALLEL_TIMEOUT}s"
-        timed_out=1
-        kill $primary_pid $backup_pid 2>/dev/null || true
-        # v4.1.7: DON'T return early - collect partial results below
-    fi
-
-    local current_time
-    current_time=$(get_timestamp)
-    local wait_duration
-    wait_duration=$((current_time - ${wait_start:-0}))
-    log "DEBUG" "Parallel tests completed in ${wait_duration}s (timed_out=$timed_out)"
-
-    # v4.1.7 FIX: Collect whatever results are available (even after timeout)
-    # Tests that completed before timeout will have written their results to file
-    local primary_score="0"
-    local backup_score="0"
-
-    # Check if primary result exists (may have completed before timeout)
-    if [[ -s "$primary_result_file" ]]; then
-        primary_score=$(cat "$primary_result_file" 2>/dev/null || echo "0")
-        log "DEBUG" "Primary result collected: $primary_score"
-    elif [[ $timed_out -eq 1 ]]; then
-        log "WARNING" "Primary test did not complete before timeout"
-    fi
-
-    # Check if backup result exists (may have completed before timeout)
-    if [[ -s "$backup_result_file" ]]; then
-        backup_score=$(cat "$backup_result_file" 2>/dev/null || echo "0")
-        log "DEBUG" "Backup result collected: $backup_score"
-    elif [[ $timed_out -eq 1 ]]; then
-        log "WARNING" "Backup test did not complete before timeout"
-    fi
-
-    # Cleanup
-    rm -f "$primary_result_file" "$backup_result_file"
-
-    # Return formatted results
-    echo "PRIMARY:$primary_score"
-    echo "BACKUP:$backup_score"
-
-    # v4.1.7: Return 1 only if BOTH have no results (complete failure)
-    [[ "$primary_score" == "0" ]] && [[ "$backup_score" == "0" ]] && return 1
-    return 0
-}
-
-# Wait for multiple processes with timeout
-wait_for_processes() {
-    local pid1="$1"
-    local pid2="$2"
-    local timeout="${3:-30}"
-    local start_time
-    start_time=$(get_timestamp)
-
-    while [[ $(( $(get_timestamp) - ${start_time:-0} )) -lt $timeout ]]; do
-        # Check if both processes are done
-        if ! kill -0 "$pid1" 2>/dev/null && ! kill -0 "$pid2" 2>/dev/null; then
-            return 0
-        fi
-
-        sleep 0.5
-    done
-
-    return 1
 }
 
 # ============================================================================
@@ -592,7 +354,7 @@ test_connectivity_score() {
     local total_targets=${#CHECK_IPS[@]}
 
     for target in "${CHECK_IPS[@]}"; do
-        if cached_ping "$target" "$interface" | grep -q "success"; then
+        if perform_ping_test "$target" "$interface" | grep -q "success"; then
             ((success_count++)) || true
         fi
     done
@@ -606,30 +368,15 @@ test_connectivity_score() {
 }
 
 # Test DNS resolution with interface binding (DoH-based)
-# Returns 25 on success, 0 on failure. Cached via the existing dns_cache
-# mechanism. The previous dig -b path failed for the demoted backup interface
-# due to asymmetric routing — see network.sh::measure_dns_doh for background.
+# Returns 25 on success, 0 on failure.
 test_dns_score() {
     local interface="$1"
-    local cache_key="dns_${interface}"
-    local now
-    now=$(get_timestamp)
-
-    if is_cache_valid "$cache_key" "$now"; then
-        echo "${dns_cache[$cache_key]}"
-        return 0
-    fi
-
     local score=0
     local result
     result=$(measure_dns_doh "$interface" "google.com")
     if [[ "$result" != "999" ]]; then
         score=25
     fi
-
-    dns_cache[$cache_key]="$score"
-    cache_timestamps[$cache_key]="$now"
-
     echo "$score"
 }
 
@@ -637,7 +384,7 @@ test_dns_score() {
 test_gateway_score() {
     local interface="$1"
     local gateway
-    gateway=$(get_interface_gateway "$interface")
+    gateway=$(ip route show dev "$interface" | grep default | awk '{print $3}' | head -1)
 
     if [[ -z "$gateway" ]]; then
         echo "0"
@@ -645,7 +392,7 @@ test_gateway_score() {
     fi
 
     # Test gateway ping
-    if cached_ping "$gateway" "$interface" | grep -q "success"; then
+    if perform_ping_test "$gateway" "$interface" | grep -q "success"; then
         echo "25"
     else
         echo "0"
@@ -662,94 +409,6 @@ test_http_score() {
     else
         echo "0"
     fi
-}
-
-# Invalidate cache for specific interface or all
-invalidate_cache() {
-    local interface="${1:-all}"
-    local invalidated=0
-
-    if [[ "$interface" == "all" ]]; then
-        ping_cache=()
-        cache_timestamps=()
-        dns_cache=()
-        gateway_cache=()
-        invalidated=${#ping_cache[@]}
-        log "DEBUG" "All caches invalidated"
-    else
-        # Invalidate interface-specific entries
-        for cache_key in "${!ping_cache[@]}"; do
-            if [[ "$cache_key" == "${interface}_"* ]]; then
-                unset "ping_cache[$cache_key]"
-                unset "cache_timestamps[$cache_key]"
-                ((invalidated++)) || true
-            fi
-        done
-
-        # DNS and gateway cache
-        local dns_key="dns_${interface}"
-        local gw_key="gw_${interface}"
-        [[ -n "${dns_cache[$dns_key]:-}" ]] && unset "dns_cache[$dns_key]" && unset "cache_timestamps[$dns_key]" && ((invalidated++)) || true
-        [[ -n "${gateway_cache[$gw_key]:-}" ]] && unset "gateway_cache[$gw_key]" && unset "cache_timestamps[$gw_key]" && ((invalidated++)) || true
-
-        log "DEBUG" "Invalidated $invalidated cache entries for $interface"
-    fi
-}
-
-# Cleanup expired cache entries
-cleanup_cache() {
-    local now
-    now=$(get_timestamp)
-    local expired=0
-
-    # Check if array exists and has elements
-    if [[ ${#cache_timestamps[@]} -gt 0 ]]; then
-        # Clean ping cache
-        for cache_key in "${!cache_timestamps[@]}"; do
-            local age
-            age=$((now - cache_timestamps[$cache_key]))
-            if [[ $age -gt 60 ]]; then  # 1 minute expiry for cleanup
-                unset "ping_cache[$cache_key]"
-                unset "cache_timestamps[$cache_key]"
-                ((expired++)) || true
-            fi
-        done
-    fi
-
-    # Use if/fi to avoid false test as last command
-    if [[ $expired -gt 0 ]]; then
-        log "DEBUG" "Cleaned $expired expired cache entries"
-    fi
-
-    # Always return success to prevent EXIT trap from catching false status
-    return 0
-}
-
-# Manage cache size to prevent memory issues
-manage_cache_size() {
-    if [[ ${#ping_cache[@]} -gt $CACHE_MAX_SIZE ]]; then
-        log "DEBUG" "Cache size (${#ping_cache[@]}) exceeds maximum ($CACHE_MAX_SIZE), cleaning oldest entries"
-
-        # Remove oldest 20% of entries
-        local to_remove=0
-        if [[ $CACHE_MAX_SIZE -gt 0 ]]; then
-            to_remove=$((CACHE_MAX_SIZE / 5))
-        fi
-        local removed=0
-
-        for cache_key in "${!cache_timestamps[@]}"; do
-            [[ $removed -ge $to_remove ]] && break
-
-            unset "ping_cache[$cache_key]"
-            unset "cache_timestamps[$cache_key]"
-            ((removed++)) || true
-        done
-
-        log "DEBUG" "Removed $removed old cache entries"
-    fi
-
-    # Always return success to prevent EXIT trap issues
-    return 0
 }
 
 # ============================================================================
@@ -794,13 +453,7 @@ get_event_performance_stats() {
 
 # Get comprehensive performance statistics
 get_performance_stats() {
-    local cache_stats
-    cache_stats=$(get_cache_stats)
-
-    local event_stats
-    event_stats=$(get_event_performance_stats)
-
-    echo "$cache_stats | $event_stats | Parallel tests: $parallel_tests"
+    get_event_performance_stats
 }
 
 # ============================================================================
@@ -880,9 +533,7 @@ EOF
 }
 
 # Export functions for use by main script
-export -f init_cache_structures cached_ping test_interfaces_parallel
-export -f invalidate_cache cleanup_cache get_cache_stats
-export -f test_interface_comprehensive get_interface_gateway
+export -f perform_ping_test test_interface_comprehensive
 export -f record_event_signal_latency record_event_processing_time
 export -f record_emergency_failover_time get_event_performance_stats get_performance_stats
 export -f calculate_interface_score export_metrics_json

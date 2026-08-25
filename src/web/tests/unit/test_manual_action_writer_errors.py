@@ -118,7 +118,7 @@ def test_lock_releases_fd_on_exception(tmp_path):
     lock_path = tmp_path / "test.lock"
     initially_open = len(os.listdir("/proc/self/fd"))
     with pytest.raises(RuntimeError, match="boom"):
-        with manual_action_writer._lock(lock_path):
+        with manual_action_writer.flock_path(lock_path):
             raise RuntimeError("boom")
     after_close = len(os.listdir("/proc/self/fd"))
     # The lock fd must be released — fd count back to baseline (allowing

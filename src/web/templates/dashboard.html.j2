@@ -35,6 +35,18 @@
             <span class="action-label">Force Failover</span>
             <span class="action-sub">{{ primary_label }} &rarr; {{ backup_label }}</span>
         </button>
+
+        <button id="restart-btn"
+                class="btn-secondary action-btn"
+                hx-post="/api/restart-monitor"
+                hx-confirm="Restart failover-monitor daemon? Active monitoring pauses briefly."
+                hx-swap="innerHTML"
+                hx-target="#action-result"
+                aria-label="Restart failover-monitor service">
+            <span class="action-icon" aria-hidden="true">&#x1f504;</span>
+            <span class="action-label">Restart Monitor</span>
+            <span class="action-sub">failover-monitor.service</span>
+        </button>
     </div>
 
     <pre id="action-result"

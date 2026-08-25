@@ -45,7 +45,7 @@ from .middleware.csrf import csrf_protect, init_csrf
 from .middleware.rate_limit import rate_limit
 from .middleware.sse_limit import reserve_slot as reserve_sse_slot
 from .readers import config_reader, events_reader, state_reader
-from .writers import config_writer, manual_action_writer
+from .writers import config_writer, manual_action_writer, service_controller
 
 
 def _configure_logging(app: Flask) -> None:
@@ -126,6 +126,18 @@ def create_app() -> Flask:
 
     init_csrf(app)
 
+    def _try_reserve_sse() -> tuple[object, ResponseReturnValue | None]:
+        """Reserve an SSE slot or return a 429 response."""
+        slot_cm = reserve_sse_slot()
+        slot = slot_cm.__enter__()
+        if slot is None:
+            slot_cm.__exit__(None, None, None)
+            return None, (jsonify({
+                "error": "sse_per_ip_limit",
+                "limit": config.SSE_MAX_CONNECTIONS_PER_IP,
+            }), 429)
+        return slot_cm, None
+
     @app.get("/")
     def index() -> ResponseReturnValue:
         snap = state_reader.read_snapshot()
@@ -143,17 +155,9 @@ def create_app() -> Flask:
 
     @app.get("/api/events/stream")
     def api_events_stream() -> ResponseReturnValue:
-        slot_cm = reserve_sse_slot()
-        slot = slot_cm.__enter__()
-        if slot is None:
-            slot_cm.__exit__(None, None, None)
-            return jsonify(
-                {
-                    "error": "sse_per_ip_limit",
-                    "limit": config.SSE_MAX_CONNECTIONS_PER_IP,
-                    "detail": "Too many concurrent SSE connections from this IP",
-                }
-            ), 429
+        slot_cm, err = _try_reserve_sse()
+        if err is not None:
+            return err
 
         def generate() -> Iterator[str]:
             try:
@@ -399,6 +403,28 @@ def create_app() -> Flask:
             }
         ), 202
 
+    @app.post("/api/restart-monitor")
+    @csrf_protect
+    @rate_limit("restart_monitor", max_calls=1, per_seconds=300)
+    def api_restart_monitor() -> ResponseReturnValue:
+        """Restart the failover-monitor daemon (rate-limited to 1/5min)."""
+        audit_log.emit("restart_monitor_requested", payload={})
+        result = service_controller.restart_failover_monitor()
+        if result.get("status") != "ok":
+            audit_log.emit("restart_monitor_failed", result="error", payload=result)
+            dispatcher.send(
+                "WARNING_SERVICE",
+                f"Restart-monitor failed via web-ui: {result.get('error', 'unknown')}",
+            )
+            return jsonify({"error": "restart_failed", **result}), 500
+
+        audit_log.emit("restart_monitor_succeeded", result="ok", payload=result)
+        dispatcher.send(
+            "INFO_SERVICE",
+            "failover-monitor restarted via web-ui",
+        )
+        return jsonify({"status": "ok", "detail": "failover-monitor.service restarted."})
+
     @app.post("/api/diag/<tool>")
     @csrf_protect
     @rate_limit("diag", max_calls=1, per_seconds=10)
@@ -431,16 +457,9 @@ def create_app() -> Flask:
             payload={"tool": tool, "target": target, "iface": iface, "count": count},
         )
 
-        slot_cm = reserve_sse_slot()
-        slot = slot_cm.__enter__()
-        if slot is None:
-            slot_cm.__exit__(None, None, None)
-            return jsonify(
-                {
-                    "error": "sse_per_ip_limit",
-                    "limit": config.SSE_MAX_CONNECTIONS_PER_IP,
-                }
-            ), 429
+        slot_cm, err = _try_reserve_sse()
+        if err is not None:
+            return err
 
         def gen() -> Iterator[str]:
             try:

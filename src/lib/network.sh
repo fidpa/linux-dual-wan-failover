@@ -331,12 +331,7 @@ calculate_weighted_score() {
 # UTILITY
 # ============================================================================
 
-# Check if value is numeric (integer or float)
-# Used across all sections: scoring, measurements, Prometheus reads
-is_numeric() {
-    local value="$1"
-    [[ "$value" =~ ^[0-9]+\.?[0-9]*$ ]]
-}
+# is_numeric() — SSOT in common.sh, hier via export -f verfuegbar
 
 # ============================================================================
 # COMPONENT SCORING FUNCTIONS
@@ -542,32 +537,7 @@ calculate_http_score() {
     echo "$score"
 }
 
-# Compare two interfaces and return the better one
-compare_interfaces() {
-    local interface1="$1"
-    local interface2="$2"
-
-    log "INFO" "Comparing interfaces: $interface1 vs $interface2"
-
-    local score1
-    local score2
-
-    score1=$(assess_network_quality "$interface1")
-    score2=$(assess_network_quality "$interface2")
-
-    log "INFO" "Interface comparison: $interface1 (${score1}%) vs $interface2 (${score2}%)"
-
-    if [[ $score1 -gt $score2 ]]; then
-        echo "$interface1"
-        return 0
-    elif [[ $score2 -gt $score1 ]]; then
-        echo "$interface2"
-        return 0
-    else
-        echo "tie"
-        return 2
-    fi
-}
+# compare_interfaces() entfernt — kein Aufrufer
 
 # ============================================================================
 # MEASUREMENTS — Basis (Latency, Packet Loss)
@@ -904,39 +874,9 @@ _measure_dns_dig_legacy() {
 # Measure DNS resolution time in milliseconds (DoH-based)
 # Args: $1=interface, $2=dns_server (deprecated/ignored), $3=test_domain
 # Returns: Time in ms, or 999 for failure
-measure_dns_time() {
-    local interface="$1"
-    # $2 (dns_server) deprecated — DoH endpoints are configured in measure_dns_doh
-    local test_domain="${3:-google.com}"
+# measure_dns_time() entfernt — kein Aufrufer
 
-    measure_dns_doh "$interface" "$test_domain"
-}
-
-# Measure HTTP connection time in milliseconds
-# Returns: Time in ms, or 999 for failure
-measure_http_time() {
-    local interface="$1"
-    local test_url="${2:-http://google.com}"
-
-    # Time the HTTP request
-    local start_ms
-    start_ms=$(date +%s%3N)
-
-    if timeout ${HTTP_TIMEOUT:-3} curl -s --interface "$interface" -m 3 "$test_url" &>/dev/null; then
-        local end_ms
-        end_ms=$(date +%s%3N)
-        local duration_ms
-        duration_ms=$((end_ms - start_ms))
-
-        log "DEBUG" "HTTP connection time for $interface: ${duration_ms}ms"
-        echo "$duration_ms"
-        return 0
-    else
-        log "DEBUG" "HTTP connection failed for $interface"
-        echo "999"
-        return 1
-    fi
-}
+# measure_http_time() entfernt — kein Aufrufer
 
 # ============================================================================
 # INTERFACE STATUS AND VALIDATION
@@ -1311,33 +1251,7 @@ EOF
 EOF
 }
 
-# Simple bandwidth test using curl
-test_bandwidth() {
-    local interface="$1"
-    local test_url="${2:-http://speedtest.tele2.net/1MB.zip}"
-    local timeout="${3:-10}"
-
-    log "DEBUG" "Testing bandwidth on $interface"
-
-    local start_time
-    start_time=$(get_timestamp)
-    local bytes_downloaded
-
-    bytes_downloaded=$(timeout "$timeout" curl -s --interface "$interface" -m "$timeout" "$test_url" | wc -c 2>/dev/null || echo "0")
-
-    local end_time
-    end_time=$(get_timestamp)
-    local duration
-    duration=$((end_time - start_time))
-
-    if [[ $duration -gt 0 ]] && [[ $bytes_downloaded -gt 0 ]]; then
-        local kbps
-        kbps=$((bytes_downloaded / duration / 1024))
-        echo "$kbps"
-    else
-        echo "0"
-    fi
-}
+# test_bandwidth() entfernt — kein Aufrufer
 
 # ============================================================================
 # MEASUREMENTS — DNS Detailed (Multi-Resolver Analyse)
@@ -1437,8 +1351,8 @@ EOF
 # Export functions for use by main script
 export -f test_connectivity test_dns test_gateway test_http_connectivity
 export -f assess_network_quality validate_interface get_interface_status
-export -f measure_latency measure_packet_loss compare_interfaces
-export -f get_gateway get_interface_ip test_bandwidth
+export -f measure_latency measure_packet_loss
+export -f get_gateway get_interface_ip
 export -f measure_jitter measure_dns_performance measure_http_performance test_wan_quality
 export -f measure_dns_detailed measure_dns_doh
 export -f _pick_probe_target measure_path_quality

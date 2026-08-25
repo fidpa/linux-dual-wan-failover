@@ -10,6 +10,7 @@ from __future__ import annotations
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from web.writers import config_writer
@@ -48,11 +49,11 @@ def test_apply_updates_serialises_concurrent_writers(tmp_path, monkeypatch):
     exit_marks: list[float] = []
     enter_lock = threading.Lock()
 
-    real_lock_cm = config_writer._lock
+    from web.writers import flock_path as real_flock_path
 
-    @config_writer.contextmanager
+    @contextmanager
     def instrumented_lock(path):
-        with real_lock_cm(path):
+        with real_flock_path(path):
             with enter_lock:
                 enter_marks.append(time.monotonic())
             try:
@@ -63,7 +64,7 @@ def test_apply_updates_serialises_concurrent_writers(tmp_path, monkeypatch):
                 with enter_lock:
                     exit_marks.append(time.monotonic())
 
-    monkeypatch.setattr(config_writer, "_lock", instrumented_lock)
+    monkeypatch.setattr(config_writer, "flock_path", instrumented_lock)
 
     results: list[dict] = []
 

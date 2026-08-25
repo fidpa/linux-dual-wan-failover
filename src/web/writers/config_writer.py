@@ -24,17 +24,14 @@ harmless, remove manually if desired.
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import os
 import re
 import subprocess
-from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
 from .. import config
+from . import flock_path
 from .service_controller import (
     is_failover_monitor_active,  # alias of is_target_service_active
     is_target_service_active,
@@ -52,20 +49,6 @@ __all__ = [
 ]
 
 _logger = logging.getLogger("failover_web.config_writer")
-
-
-@contextmanager
-def _lock(path: Path) -> Iterator[None]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o640)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
 
 
 class DuplicateKeyError(ValueError):
@@ -145,7 +128,7 @@ def apply_updates(accepted: dict[str, int]) -> dict[str, Any]:
     if not accepted:
         return {"status": "noop", "applied": [], "detail": "No accepted updates"}
 
-    with _lock(config.CONFIG_LOCK):
+    with flock_path(config.CONFIG_LOCK):
         try:
             current = config.OVERRIDE_CONFIG_PATH.read_text(encoding="utf-8")
         except FileNotFoundError:

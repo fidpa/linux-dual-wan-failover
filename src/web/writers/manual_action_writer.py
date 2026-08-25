@@ -16,34 +16,17 @@ workers; the daemon's request_id deduplication is the second line of defence.
 from __future__ import annotations
 
 import errno
-import fcntl
 import json
 import logging
 import os
 import time
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
 from .. import config
+from . import flock_path
 
 _logger = logging.getLogger("failover_web.manual_action")
-
-
-@contextmanager
-def _lock(path: Path) -> Iterator[None]:
-    """Exclusive flock on ``path`` (created if missing) for the wrapped block."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o640)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
 
 
 def _write_atomic(target: Path, payload: bytes) -> None:
@@ -94,7 +77,7 @@ def submit_action(action: str, *, request_id: str | None = None) -> dict[str, ob
         "submitted": False,
     }
     try:
-        with _lock(config.MANUAL_ACTION_LOCK):
+        with flock_path(config.MANUAL_ACTION_LOCK):
             _write_atomic(config.MANUAL_ACTION_FILE, serialised)
         result["submitted"] = True
         _logger.info("manual_action submitted: %s (id=%s)", action, rid)

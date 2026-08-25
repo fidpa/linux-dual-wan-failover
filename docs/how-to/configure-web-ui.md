@@ -2,7 +2,7 @@
 
 The Web-UI ships in `src/web/`. It is a Flask + gunicorn dashboard
 that visualises `failover-monitor` state and exposes operator buttons for
-manual failback, force-failover, and config-editing.
+manual failback, force-failover, restart-monitor, and config-editing.
 
 > **Authentication is intentionally absent.** The web app is meant to sit
 > behind a reverse proxy on a LAN-only host. The defence-in-depth layers
@@ -115,6 +115,7 @@ uses:
 |----------|------------|
 | `POST /api/failback` | `WARN_FAILOVER` |
 | `POST /api/force-failover` | `CRIT_FAILOVER` |
+| `POST /api/restart-monitor` | `WARN_FAILOVER` |
 | `PUT /api/config` (success) | `INFO_FAILOVER` |
 | `PUT /api/config` (installed but restart failed) | `WARN_FAILOVER` |
 
@@ -216,12 +217,13 @@ curl -s https://failover.local/api/state | jq '.current_wan, .freshness'
 
 Open `https://<your-hostname>/` in a browser. The dashboard polls
 `/api/state-html` every 5 s, renders interface cards with score / latency
-/ loss / DNS / HTTP metrics, and surfaces two operator buttons:
+/ loss / DNS / HTTP metrics, and surfaces three operator buttons:
 
 - **Manual Failback** — only valid when the daemon is currently on backup.
 - **Force Failover** — only valid when the daemon is currently on primary.
+- **Restart Monitor** — restarts the failover-monitor daemon (rate-limited to one call per 5 minutes).
 
-The `Configuration` accordion lists 16 whitelisted tunables; values are
+The `Configuration` accordion lists 15 whitelisted tunables; values are
 range-checked client-side and re-validated server-side before staging.
 The `Diagnostics` accordion runs `ping` / `dig` / `traceroute` / `mtr`
 against an arbitrary target and streams the output via Server-Sent Events.

@@ -25,10 +25,9 @@ Three production realities ate the combined design:
 ### 1. Restart cost
 
 `failover-monitor`'s scoring loop holds a non-trivial amount of in-memory
-state: cache of recent latency/loss values, anti-flap counters, hysteresis
-windows, lockfile ownership. Restarting it means losing that state and
-re-priming the cache (~30 s of degraded-quality scoring as fresh data
-flows in).
+state: anti-flap counters, hysteresis windows, lockfile ownership.
+Restarting it means losing that state and rebuilding the consecutive
+counters (~30 s of degraded-quality scoring as fresh data flows in).
 
 But the **event-detection** code is the part most likely to need updating
 — NM's output format changes occasionally, edge cases keep emerging

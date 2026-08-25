@@ -201,6 +201,26 @@ Rate-limit: 1 / 120 s.
 Audit event: `force_failover_submitted` etc.
 Alert: `CRIT_FAILOVER`.
 
+### `POST /api/restart-monitor`
+
+Restart the failover-monitor daemon. Rate-limited to one call per 5 minutes.
+
+| Aspect       | Detail                                    |
+|-------------|-------------------------------------------|
+| Auth         | CSRF token (double-submit cookie)         |
+| Rate limit   | 1 call / 300 s per IP                     |
+| Audit log    | `restart_monitor_requested`, `restart_monitor_succeeded` / `restart_monitor_failed` |
+
+**Success (200)**
+```json
+{"status": "ok", "detail": "failover-monitor.service restarted."}
+```
+
+**Error (500)**
+```json
+{"error": "restart_failed", "status": "...", "error": "..."}
+```
+
 ### `PUT /api/config`
 
 Apply whitelisted config updates. Body is a JSON object mapping
@@ -295,7 +315,7 @@ env to `0` only in tests / dev.
 
 | Code | When |
 |------|------|
-| 200 | Success (read or applied mutation). |
+| 200 | Success (read, applied mutation, or restart-monitor). |
 | 202 | Mutation accepted; daemon will pick it up. |
 | 207 | Partial success (mutation persisted, side-effect failed). |
 | 400 | Empty/malformed body. |

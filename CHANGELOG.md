@@ -5,6 +5,55 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-08-25
+
+Code-quality release: one bug fix, dead-code removal, and DRY refactoring across
+the Bash daemons and the Flask web UI. No new features beyond a dedicated
+restart-monitor button — the operational surface is unchanged.
+
+### Fixed
+
+- **Failback guard against unknown timestamp.** After a service restart,
+  `is_failback_needed()` defaulted `failover_to_backup_time` to `0`, making
+  `time_on_backup` equal to the Unix epoch (~1.7 billion seconds) and instantly
+  satisfying `MIN_BACKUP_TIME` — a premature failback. The sister function
+  `is_emergency_failback_needed()` already had this guard; now both share the
+  same "unknown = block" logic.
+
+- **`is_numeric()` regex inconsistency.** Two definitions with different
+  semantics (one rejected trailing dots, the other accepted them) coexisted in
+  `common.sh` and `network.sh`. Unified to a single SSOT in `common.sh`.
+
+- **SC2015 false error path.** `[[ ... ]] && { mkdir; chmod; } || log_warning`
+  could trigger the warning branch when `chmod` failed inside the group, not
+  when `STATE_FILE` was unset. Replaced with a proper `if/then/else`.
+
+### Added
+
+- **`POST /api/restart-monitor`** endpoint with rate-limiting (1 call / 5 min),
+  CSRF protection, and audit logging. A matching button in the dashboard
+  replaces the previous "use `systemctl` on the CLI" instruction.
+
+### Removed
+
+- **Inert cache framework** (~350 lines in `performance.sh`). The caching layer
+  (`cached_ping`, `init_cache_structures`, `invalidate_cache`, …) ran inside
+  `$(…)` subshells, so every write to the in-memory cache was discarded
+  immediately. Live-verified: permanent "0% hit rate (0/0), 0 entries".
+  Callers now use `perform_ping_test` directly.
+
+- **Four dead functions** in `network.sh`: `compare_interfaces`,
+  `measure_dns_time`, `measure_http_time`, `test_bandwidth` — zero callers
+  outside their own definitions.
+
+### Changed
+
+- **`_lock()` → `flock_path()`** extracted from `config_writer.py` and
+  `manual_action_writer.py` into `writers/__init__.py` (DRY).
+
+- **SSE slot reservation** deduplicated into `_try_reserve_sse()` helper in
+  `app.py`, replacing two identical 10-line blocks.
+
 ## [0.8.1] — 2026-08-11
 
 Ten scripts had lost their executable bit — a mode-only change, no content
@@ -846,7 +895,9 @@ stack that has been running in production since 2025-08.
   `ping`.
 - **CI**: `shellcheck`, `bashate`, `bats`, `ruff`.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.6.0...v0.7.0
