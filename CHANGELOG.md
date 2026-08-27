@@ -5,7 +5,45 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.5] - 2026-08-27
+## [0.9.6] - 2026-08-28: Release titles come from the changelog headings
+
+Every published release carries a headline in its title, but no changelog
+heading did. The titles were typed by hand at `gh release create` and existed
+only on GitHub, so a corrected section left its title untouched, and nothing in
+the repository recorded what the title was supposed to say. The headlines are
+now part of the headings they belong to, and a `release.yml` reads them from
+there.
+
+Documentation and CI only. No code, configuration or on-disk format changed.
+
+### Added
+
+- **Pushing a version tag publishes the release.** `.github/workflows/release.yml`
+  cuts the changelog section for the tag, uses it as the body, and takes the
+  title from the same heading, so the two can no longer disagree. It refuses to
+  publish when the section is empty, warns in the workflow log when a heading
+  carries no headline instead of quietly falling back to the bare tag name, and
+  stops at the link-reference block so the oldest section does not paste those
+  links into its body.
+- **A tag whose number the `VERSION` file does not carry fails the workflow.**
+  `VERSION` has been the single source for the running version since 0.7.1;
+  the check runs before the release is cut, so a mismatch stops the publication
+  rather than shipping a release that reports the previous version at runtime.
+
+### Changed
+
+- **Each section heading carries the headline of its release.** The form is
+  `## [X.Y.Z] - YYYY-MM-DD: <headline>`. The headlines are the ones already
+  published on the release pages, moved into the repository unchanged; none was
+  invented for this release.
+- **The 0.7.1 section sits above 0.7.0**, where its date places it. It was the
+  only section out of order.
+
+### Upgrade notes
+
+Nothing to do. This release changes changelog text and adds a workflow.
+
+## [0.9.5] - 2026-08-27: Editorial sections state what holds, not how much did not
 
 A release page says what now holds. How long something was wrong and how many
 statements a check did not survive address the maintainer, not the reader, and
@@ -34,7 +72,7 @@ Documentation only. No code, configuration or on-disk format changed.
 
 Nothing to do. This release changes changelog text and one release title.
 
-## [0.9.4] - 2026-08-27
+## [0.9.4] - 2026-08-27: Threat-model note no longer names a private repo
 
 Documentation only. One sentence in the web-UI architecture document named a
 private predecessor repository by name, which told the reader where a document
@@ -51,7 +89,7 @@ they cannot open used to live.
   outside can open. The eight scenarios and their mitigations are unchanged,
   and the table below that sentence still carries the ones that matter here.
 
-## [0.9.3] - 2026-08-27
+## [0.9.3] - 2026-08-27: Entries lead with the effect
 
 A second editorial pass, this time against a written style guide rather than by
 feel. 0.9.2 had removed the typographic clutter; this one changes what the
@@ -114,7 +152,7 @@ Nothing to do. No code, configuration, on-disk format or documentation outside
 `CHANGELOG.md` changed in this release, and all 16 GitHub release bodies were
 re-published from the rewritten sections.
 
-## [0.9.2] - 2026-08-27
+## [0.9.2] - 2026-08-27: Changelog and release notes rewritten for readability
 
 Editorial pass over the changelog and every GitHub release. No code, config or
 documentation outside this file changed.
@@ -150,7 +188,7 @@ documentation outside this file changed.
 - **The comparison links at the foot of the file skipped 0.9.1.**
   `[Unreleased]` still pointed at `v0.9.0...HEAD` and no `[0.9.1]` line existed.
 
-## [0.9.1] - 2026-08-27
+## [0.9.1] - 2026-08-27: The failback stability window does not survive a dip
 
 Documentation only. An audit of the anti-flapping docs against the code found
 that `STABILITY_RESET_THRESHOLD` does not do what the comments, the prose and
@@ -199,7 +237,7 @@ a way that would have sent an operator tuning the wrong knob mid-incident.
   counts (fresh collector readings, not poll intervals) and gives
   `EMERGENCY_FAILBACK_MIN_BACKUP_TIME` its default of 1800 seconds.
 
-## [0.9.0] - 2026-08-25
+## [0.9.0] - 2026-08-25: Failback guard, dead code removed, restart button
 
 Code quality: one bug fix, dead code removed, some DRY work across the Bash
 daemons and the Flask web UI. The only new feature is a restart-monitor button.
@@ -251,7 +289,7 @@ daemons and the Flask web UI. The only new feature is a restart-monitor button.
 - **SSE slot reservation lives in one place.** `_try_reserve_sse()` in `app.py`
   replaces two identical ten-line blocks.
 
-## [0.8.1] - 2026-08-11
+## [0.8.1] - 2026-08-11: Executable bit restored on install.sh and the service scripts
 
 Ten scripts had lost their executable bit. Mode-only change, no content diff.
 
@@ -267,7 +305,7 @@ Ten scripts had lost their executable bit. Mode-only change, no content diff.
   `tests/mocks/{ip,nmcli,ping}` stand-ins. Confirmed with `git diff --summary`:
   `mode change 100644 => 100755` only.
 
-## [0.8.0] - 2026-08-08
+## [0.8.0] - 2026-08-08: Real mutual exclusion for route changes
 
 Four processes mutate the same routing table, and until now nothing actually
 stopped them doing it at the same time. The `failover-in-progress` marker looked
@@ -368,62 +406,7 @@ file, where the contention is over the routing table.
   `measure_path_quality` at samples plus twice `PING_TIMEOUT`, both of which push
   against the metrics collector's 30-second subprocess budget.
 
-## [0.7.0] - 2026-08-02
-
-WAN quality was measured against the wrong endpoint. `test_wan_quality()` probed
-the interface gateway, which on this router is the DSL modem or the LTE stick one
-hop away, so latency, packet loss and jitter described the link to that device
-rather than the uplink behind it.
-
-Measured on the production router: the LTE backup reported 1.32 ms, 0 % loss and
-0.54 ms jitter, the DSL primary 0.23 ms, 0 % and 0 ms. Over the same period the
-DNS probe, which does traverse the uplink, timed out on 5.7 % of its attempts
-against that same backup and showed a p95 of 973 ms.
-
-Latency, loss and jitter are configured at 25 %, 25 % and 15 % of the composite
-score, so those three inputs decide 65 % of it. An idle backup could therefore
-sit near the top of the scale until a failover put real traffic on it.
-
-### Changed
-
-- **The backup link no longer scores near 100 while its uplink is degraded.**
-  `test_wan_quality()` now probes the first responding `CHECK_IPS` entry instead
-  of the interface gateway, so latency, loss and jitter describe the internet
-  path. `WAN_QUALITY_TARGET_MODE` accepts `internet` (new default) or `gateway`
-  and restores the old target selection; it does not restore the other two
-  changes in this section. The metrics collector now sources the operator config,
-  without which neither that switch nor a custom `CHECK_IPS` would have reached
-  its measuring subprocess.
-
-  If no `CHECK_IPS` address answers, `_pick_probe_target()` returns empty and
-  `measure_path_quality()` reports its sentinel values (999.99 ms, 100 % loss)
-  rather than falling back to the gateway. An interface that cannot reach any
-  probe target scores as unreachable, which is the safe direction but will look
-  like an outage on a link that only blocks ICMP.
-
-- **A slow link no longer risks stalling the metrics collector.**
-  `measure_path_quality()` derives latency, loss and jitter (`mdev`) from one
-  `ping` run against the chosen target. The three previous series (5, 10 and 10
-  sequential `ping -c 1` calls) described three different moments, and at the
-  default `PING_TIMEOUT` of 2 seconds their worst case of 25 timeouts came to
-  50 seconds, past the collector's 30-second subprocess budget. When that budget
-  was exceeded the run produced nothing and `wan_quality.prom` kept its previous
-  contents until the next successful pass.
-
-### Fixed
-
-- **WAN quality metrics were dropped for any interface whose gateway could not
-  be determined.** In that branch `test_wan_quality()` logged a warning to stdout
-  and then emitted its fallback JSON on the same stream. The metrics collector
-  parses that stdout with `json.loads()`, so the warning line preceded the
-  document and raised `JSONDecodeError: Extra data`. The branch is reached
-  whenever `get_gateway()` finds no default route on the interface. `common.sh`
-  states the rule this broke: a function whose stdout is captured must not log
-  without `>&2`. All log calls on this path now redirect to stderr, covered by a
-  regression test that asserts the payload starts with `{` and carries no log
-  markers.
-
-## [0.7.1] - 2026-08-03
+## [0.7.1] - 2026-08-03: Version single-sourced, documentation corrected against the code
 
 The orchestrator had been announcing `Failover Monitor v0.1.1` on every start
 since May. Nine releases of drift, because `failover-monitor.sh` carried its own
@@ -510,7 +493,62 @@ No configuration or on-disk format changes. Existing installations keep working.
 Re-running `install.sh` is what places the `VERSION` file; until then the daemon
 logs `v unknown` instead of a number, and nothing else reads it.
 
-## [0.6.0] - 2026-08-02
+## [0.7.0] - 2026-08-02: WAN quality measured on the real internet path
+
+WAN quality was measured against the wrong endpoint. `test_wan_quality()` probed
+the interface gateway, which on this router is the DSL modem or the LTE stick one
+hop away, so latency, packet loss and jitter described the link to that device
+rather than the uplink behind it.
+
+Measured on the production router: the LTE backup reported 1.32 ms, 0 % loss and
+0.54 ms jitter, the DSL primary 0.23 ms, 0 % and 0 ms. Over the same period the
+DNS probe, which does traverse the uplink, timed out on 5.7 % of its attempts
+against that same backup and showed a p95 of 973 ms.
+
+Latency, loss and jitter are configured at 25 %, 25 % and 15 % of the composite
+score, so those three inputs decide 65 % of it. An idle backup could therefore
+sit near the top of the scale until a failover put real traffic on it.
+
+### Changed
+
+- **The backup link no longer scores near 100 while its uplink is degraded.**
+  `test_wan_quality()` now probes the first responding `CHECK_IPS` entry instead
+  of the interface gateway, so latency, loss and jitter describe the internet
+  path. `WAN_QUALITY_TARGET_MODE` accepts `internet` (new default) or `gateway`
+  and restores the old target selection; it does not restore the other two
+  changes in this section. The metrics collector now sources the operator config,
+  without which neither that switch nor a custom `CHECK_IPS` would have reached
+  its measuring subprocess.
+
+  If no `CHECK_IPS` address answers, `_pick_probe_target()` returns empty and
+  `measure_path_quality()` reports its sentinel values (999.99 ms, 100 % loss)
+  rather than falling back to the gateway. An interface that cannot reach any
+  probe target scores as unreachable, which is the safe direction but will look
+  like an outage on a link that only blocks ICMP.
+
+- **A slow link no longer risks stalling the metrics collector.**
+  `measure_path_quality()` derives latency, loss and jitter (`mdev`) from one
+  `ping` run against the chosen target. The three previous series (5, 10 and 10
+  sequential `ping -c 1` calls) described three different moments, and at the
+  default `PING_TIMEOUT` of 2 seconds their worst case of 25 timeouts came to
+  50 seconds, past the collector's 30-second subprocess budget. When that budget
+  was exceeded the run produced nothing and `wan_quality.prom` kept its previous
+  contents until the next successful pass.
+
+### Fixed
+
+- **WAN quality metrics were dropped for any interface whose gateway could not
+  be determined.** In that branch `test_wan_quality()` logged a warning to stdout
+  and then emitted its fallback JSON on the same stream. The metrics collector
+  parses that stdout with `json.loads()`, so the warning line preceded the
+  document and raised `JSONDecodeError: Extra data`. The branch is reached
+  whenever `get_gateway()` finds no default route on the interface. `common.sh`
+  states the rule this broke: a function whose stdout is captured must not log
+  without `>&2`. All log calls on this path now redirect to stderr, covered by a
+  regression test that asserts the payload starts with `{` and carries no log
+  markers.
+
+## [0.6.0] - 2026-08-02: Emergency-failback recalibration and manual-failback feedback
 
 A flapping primary link in production, meaning repeated WAN-session loss with
 layer 1 intact, exposed the emergency-failback path as far too eager. Separately,
@@ -583,7 +621,7 @@ to 244 ms, downlink-saturated 182 to 252 ms, uplink-saturated 321 to 1231 ms.
   409 without writing a request file, expired cooldown returns 202, unreadable
   timestamp fails open to 202.
 
-## [0.5.1] - 2026-07-16
+## [0.5.1] - 2026-07-16: Logging defaults ordering fix
 
 A field incident in production, where a captured function's log line corrupted a
 `sed` expression during a real DSL outage, prompted an audit of the logging setup
@@ -605,7 +643,7 @@ here. The code was clean, but the audit surfaced one latent ordering bug.
   against future toolkit defaults. Overrides via environment or `EnvironmentFile`
   work as before.
 
-## [0.5.0] - 2026-06-29
+## [0.5.0] - 2026-06-29: Failover correlation-id tracing
 
 Correlation-id tracing for failovers. Every failover now carries a single id that
 travels through all four services and the metrics database, so one event can be
@@ -649,7 +687,7 @@ reconstructed end to end.
   `PID_TIMESTAMP`, so route-guardian's stale detection still parses it. Fully
   backward compatible.
 
-## [0.4.1] - 2026-06-12
+## [0.4.1] - 2026-06-12: Production-review fixes and CI overhaul
 
 The first live run of the 0.4.0 CI pipeline caught two runner-environment issues
 in the new jobs themselves. All the code checks had passed.
@@ -673,7 +711,7 @@ in the new jobs themselves. All the code checks had passed.
   scan never saw it. The lesson: verify gitleaks against the actual commit, not
   the working tree.
 
-## [0.4.0] - 2026-06-12
+## [0.4.0] - 2026-06-12: Code-review fixes across routing, systemd and the web UI
 
 Findings from a full code review of the production deployment, ported here. Three
 of these fixes concern paths that had never worked: the unit tests mocked
@@ -836,7 +874,7 @@ them.
   live in command-substitution subshells and can never accumulate, now documented
   in `performance.sh`.
 
-## [0.3.0] - 2026-06-10
+## [0.3.0] - 2026-06-10: Web UI write-path fix and anti-flapping docs
 
 ### Fixed
 
@@ -858,7 +896,7 @@ them.
   `docs/explanation/anti-flapping.md`, and in a daemon log line that printed
   "300s cooldown" while enforcing 600.
 
-## [0.2.0] - 2026-05-05
+## [0.2.0] - 2026-05-05: Optional Flask web UI
 
 ### Added
 
@@ -918,7 +956,7 @@ them.
   `failover-monitor.service` once after installing the web UI so the group flips
   into place.
 
-## [0.1.1] - 2026-05-02
+## [0.1.1] - 2026-05-02: DNS over HTTPS unblocks failback
 
 ### Fixed
 
@@ -1030,7 +1068,7 @@ them.
   `tests/unit/test_quota.bats` were red as a symptom of the
   `_backup_quota_cap()` bug.
 
-## [0.1.0] - 2026-04-27
+## [0.1.0] - 2026-04-27: First public alpha
 
 First public alpha, extracted from a private homelab dual-WAN failover stack that
 has been running in production since August 2025.
@@ -1060,7 +1098,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.5...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.6...HEAD
+[0.9.6]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.2...v0.9.3
