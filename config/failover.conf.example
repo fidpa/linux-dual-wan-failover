@@ -157,7 +157,10 @@ EMERGENCY_FAILBACK_MIN_BACKUP_TIME=1800  # 30 min on backup before the escape ha
 MIN_FAILBACK_SCORE=60        # primary must reach this before failback is even considered
 MIN_BACKUP_TIME=3600         # seconds we MUST stay on backup after failover (1 h)
 MIN_STABLE_DURATION=900      # primary must stay healthy for this long (15 min)
-STABILITY_RESET_THRESHOLD=50 # window resets only when score drops below this
+STABILITY_RESET_THRESHOLD=50 # log-only: controls whether the window-reset warning
+                             # is emitted. It does NOT change failback timing — any
+                             # score below FAILOVER_THRESHOLD_DOWN restarts the
+                             # window. Raise MIN_STABLE_DURATION instead.
 
 # ============================================================================
 # Last-resort failover (DANGEROUS — disabled by default)

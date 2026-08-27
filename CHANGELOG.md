@@ -5,6 +5,60 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] — 2026-08-27
+
+Documentation release. An audit of the anti-flapping explanation against
+`update_interface_counters()` found that `STABILITY_RESET_THRESHOLD` does not
+do what the comments, prose and UI help text said it did: it never
+influences *when* failback happens. Nothing in the daemon's behaviour changes
+here — only the descriptions of it, which were wrong in a way that would have
+sent an operator tuning the wrong knob during an incident.
+
+### Fixed
+
+#### Documentation corrected against the code
+
+- **`STABILITY_RESET_THRESHOLD` does not gate failback timing.** The docs
+  described a two-tier design in which scores in the
+  `[STABILITY_RESET_THRESHOLD .. FAILOVER_THRESHOLD_DOWN)` band keep the
+  failback stability window open, so a borderline dip would not cost the
+  primary its accumulated stability. The code does not work that way. Every
+  scoring round in which the primary is below `FAILOVER_THRESHOLD_DOWN` (60)
+  zeroes `consecutive_recoveries`, and that counter is the *first* gate in
+  `is_failback_needed()` — it must reach `RECOVERY_THRESHOLD` (20) before
+  `last_primary_recovery_time` is read at all. When the primary recovers,
+  `prev_recoveries == 0` restarts the stability window from that moment,
+  whatever the threshold did. The reset therefore only decides whether the
+  `PRIMARY stability window reset` warning is logged.
+
+  The real behaviour is *stricter* than the old description: the window
+  restarts after every dip below 60, not only below 50. That is the safe
+  direction, which is why this is documented rather than "fixed" — making the
+  window genuinely survive a dip would shorten the stability actually required
+  before returning to the primary. Affected:
+  `docs/explanation/anti-flapping.md` (section 4 and the "what not to touch"
+  list, which now points at `MIN_STABLE_DURATION` as the knob that does change
+  failback timing), the comment block in `failover-monitor.sh`, and the field
+  description in `config_reader.py`, which the web UI shows next to the input.
+
+- **`window_kept=` debug field renamed to `reset_warning=`.** The per-round
+  debug line for a degraded primary printed `window_kept=yes` whenever the
+  score sat in the 50–59 band — telling an operator reading the journal during
+  an incident exactly the thing that is not true. The field now reports what
+  the comparison actually decides: whether the reset warning fires. This is a
+  log-text change; no gating, threshold or state transition is affected.
+  `failover.conf.example` carries the same correction next to the variable.
+
+- **Stale `EMERGENCY_FAILBACK_COOLDOWN` in the daemon comment.** The
+  preconditions block for `is_emergency_failback_needed()` still said
+  `(15min)`. v0.6.0 raised the default from 900 s to 3600 s and did not carry
+  the comment along; every other statement in the repo
+  (`failover.conf.example`, `docs/explanation/anti-flapping.md`) already said
+  60 min. Same block: `EMERGENCY_FAILBACK_DEGRADED_CHECKS` is now stated in
+  the unit it actually counts — consecutive *fresh* collector readings, not
+  poll intervals — and `EMERGENCY_FAILBACK_MIN_BACKUP_TIME` carries its
+  default (1800 s).
+
 ## [0.9.0] — 2026-08-25
 
 Code-quality release: one bug fix, dead-code removal, and DRY refactoring across

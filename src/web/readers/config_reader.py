@@ -28,7 +28,7 @@ CONFIG_SCHEMA: tuple[ConfigField, ...] = (
     ("MIN_FAILBACK_SCORE", int, 30, 100, "Minimum primary score required for failback after stability"),
     ("MIN_BACKUP_TIME", int, 60, 86_400, "Minimum seconds on backup before failback is considered"),
     ("MIN_STABLE_DURATION", int, 60, 7200, "Continuous primary stability required before failback"),
-    ("STABILITY_RESET_THRESHOLD", int, 0, 100, "Score below which primary stability window is reset"),
+    ("STABILITY_RESET_THRESHOLD", int, 0, 100, "Score below which the stability-window reset is logged (does not change failback timing)"),
     ("LATENCY_CRITICAL", int, 10, 5000, "Critical latency threshold (ms)"),
     ("LATENCY_WARNING", int, 5, 5000, "Warning latency threshold (ms)"),
     ("PACKET_LOSS_CRITICAL", int, 1, 100, "Critical packet loss threshold (%)"),

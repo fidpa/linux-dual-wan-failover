@@ -310,18 +310,24 @@ update_interface_counters() {
         consecutive_failures[$PRIMARY_IFACE]=$((${consecutive_failures[$PRIMARY_IFACE]:-0} + 1))
         consecutive_recoveries[$PRIMARY_IFACE]=0
 
-        # Stability-window reset uses a separate threshold to tolerate score
-        # flapping around FAILOVER_THRESHOLD_DOWN=60. Only a real degradation
-        # (< STABILITY_RESET_THRESHOLD) resets the 60-minute failback-stability
-        # window. Scores in [STABILITY_RESET_THRESHOLD .. 59] keep the window
-        # open but continue to increment consecutive_failures (preserving
-        # failover responsiveness).
+        # Stability-window reset uses a separate threshold, intended to let
+        # scores in [STABILITY_RESET_THRESHOLD .. 59] keep the window open
+        # while only a real degradation resets it.
+        #
+        # NOTE: this reset is effectively redundant. consecutive_recoveries is
+        # zeroed unconditionally above, and that is gate 1 of
+        # is_failback_needed() — so last_primary_recovery_time is never read
+        # while the primary is degraded. Once the primary recovers,
+        # prev_recoveries == 0 restarts the window anyway (see below). The
+        # threshold therefore affects the log line, not the failback timing.
+        # Left as-is deliberately: making the window genuinely survive a dip
+        # would *loosen* failback gating, which is the wrong direction.
         if [[ $last_primary_recovery_time -gt 0 ]] && [[ $eth0_score -lt $STABILITY_RESET_THRESHOLD ]]; then
             log_warning "PRIMARY stability window reset (eth0=$eth0_score < STABILITY_RESET_THRESHOLD=$STABILITY_RESET_THRESHOLD, was stable since $(date -d "@$last_primary_recovery_time" '+%H:%M:%S'))"
             last_primary_recovery_time=0
         fi
 
-        log_debug "Primary degraded: eth0=$eth0_score (consecutive failures: ${consecutive_failures[$PRIMARY_IFACE]}/$FAILURE_THRESHOLD, window_kept=$([[ $eth0_score -ge $STABILITY_RESET_THRESHOLD ]] && echo yes || echo no))"
+        log_debug "Primary degraded: eth0=$eth0_score (consecutive failures: ${consecutive_failures[$PRIMARY_IFACE]}/$FAILURE_THRESHOLD, reset_warning=$([[ $eth0_score -lt $STABILITY_RESET_THRESHOLD ]] && echo yes || echo no))"
     else
         # Primary is healthy
         consecutive_failures[$PRIMARY_IFACE]=0
@@ -448,10 +454,13 @@ _get_prom_metric_ms() {
 #   - current_wan == "backup"
 #   - primary score >= EMERGENCY_FAILBACK_MIN_PRIMARY_SCORE (60)
 #   - backup DNS time > EMERGENCY_FAILBACK_DNS_THRESHOLD_MS for
-#     EMERGENCY_FAILBACK_DEGRADED_CHECKS consecutive checks (default 6 × 15s = 90s)
-#   - at least EMERGENCY_FAILBACK_MIN_BACKUP_TIME on backup (10min — avoids
-#     racing a legitimate failover that just happened)
-#   - EMERGENCY_FAILBACK_COOLDOWN (15min) since last emergency failback
+#     EMERGENCY_FAILBACK_DEGRADED_CHECKS consecutive *fresh* collector
+#     readings (default 6; at the ~52 s collector cadence ≈ 310 s of evidence,
+#     not 6 × the 15 s poll interval)
+#   - at least EMERGENCY_FAILBACK_MIN_BACKUP_TIME on backup (default 1800 s
+#     = 30min — avoids racing a legitimate failover that just happened)
+#   - EMERGENCY_FAILBACK_COOLDOWN (default 3600 s = 60min) since the last
+#     emergency failback
 #
 # Side effects:
 #   - increments/resets global backup_degraded_streak

@@ -87,15 +87,27 @@ on an unknown value.
 ## 4. Stability window for failback
 
 Failback requires the primary to have been stable for `MIN_STABLE_DURATION`
-(default 900 s = 15 min). The window resets if the primary's score drops
-below `STABILITY_RESET_THRESHOLD` (default 50).
+(default 900 s = 15 min). The window starts when the primary's score first
+returns to `FAILOVER_THRESHOLD_DOWN` or above after a dip.
 
-The two-tier reset is here to avoid a real-world bug: setting the reset
-threshold equal to the failover threshold (60) meant any oscillation in
-the 50–75 range kept the window open _and_ the failover counter rising,
-producing repeated failovers without clean failback. Splitting the
-reset threshold below the failover threshold lets the window survive
-borderline scores while still resetting on truly bad scores.
+`STABILITY_RESET_THRESHOLD` (default 50) was introduced to make the window
+survive borderline scores: the two-tier design came from a real-world bug
+where setting the reset threshold equal to the failover threshold (60) meant
+any oscillation in the 50–75 range kept the window open _and_ the failover
+counter rising, producing repeated failovers without clean failback.
+
+> **The threshold does not actually do this.** Any score below
+> `FAILOVER_THRESHOLD_DOWN` zeroes `consecutive_recoveries`, which is the
+> first gate in `is_failback_needed()` — so the stability window is never
+> read while the primary is degraded. When the primary recovers, the window
+> restarts from that moment regardless of how far the score dipped. The
+> threshold changes which log line you get, not when failback happens.
+>
+> The practical effect is that failback gating is slightly *stricter* than
+> this section used to claim — the window restarts after every dip. That is
+> the safe direction, which is why the behaviour is documented rather than
+> "fixed": making the window genuinely survive a dip would shorten the
+> stability actually required before returning to the primary.
 
 ## Why "failback is more dangerous than failover"
 
@@ -138,5 +150,6 @@ If you're seeing flapping:
 
 What not to touch unless you know why:
 
-- `STABILITY_RESET_THRESHOLD` — the 10-point gap below
-  `FAILOVER_THRESHOLD_DOWN` exists for the bug above.
+- `STABILITY_RESET_THRESHOLD` — changing it will not change failback
+  timing (see section 4). If you want a longer stability requirement,
+  raise `MIN_STABLE_DURATION` instead.
