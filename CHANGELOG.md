@@ -5,6 +5,35 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-08-27
+
+A release page says what now holds. How long something was wrong and how many
+statements a check did not survive address the maintainer, not the reader, and
+they push the corrections themselves into the background. The rule this project
+follows now is that the tally stays out of the release page and its title, while
+every correction keeps its own entry, with its effect and its anchor in the code.
+
+Documentation only. No code, configuration or on-disk format changed.
+
+### Changed
+
+- **The editorial sections open with what was put right, not with a count of
+  what was wrong.** The introduction to 0.9.3 no longer carries the number of
+  corrected statements or the observation that earlier passes had missed them,
+  its entry on code anchors no longer reports how many entries carried one
+  before, and the 0.9.2 note about the comparison links drops the aside on where
+  the omission came from. Every individual correction stays exactly where it
+  was, with its effect and its file, function or tag reference.
+
+- **The published title of v0.9.3 names the pass, not its yield.** It carried a
+  count of corrected facts, which made the tally the first thing a visitor read
+  in the release list and on the release page. The title now reads
+  `v0.9.3: Entries lead with the effect`.
+
+### Upgrade notes
+
+Nothing to do. This release changes changelog text and one release title.
+
 ## [0.9.4] - 2026-08-27
 
 Documentation only. One sentence in the web-UI architecture document named a
@@ -26,8 +55,8 @@ they cannot open used to live.
 
 A second editorial pass, this time against a written style guide rather than by
 feel. 0.9.2 had removed the typographic clutter; this one changes what the
-sentences say first. It also corrects two statements of fact that had survived
-every previous pass because nobody counted them.
+sentences say first. It also corrects statements of fact where the code
+contradicted them; they are listed below.
 
 The rules now live outside this repo and apply to all of them. They were settled
 after reading Common Changelog, the Kubernetes release-notes guide and Keep a
@@ -64,7 +93,7 @@ Changelog, and after an external review of a sample section.
 
 - **Entries about code name a place in the code.** A file, a function or a config
   variable, with public names before internal ones, so a claim can be checked
-  against the source. Before this pass, 63 of 99 entries did.
+  against the source.
 
 - **Three entries in 0.5.0 and 0.2.0 that were bare identifiers got a sentence.**
   "`event_id` column" and "`src/lib/event-id.sh`" said what was added but not
@@ -119,8 +148,7 @@ documentation outside this file changed.
 ### Fixed
 
 - **The comparison links at the foot of the file skipped 0.9.1.**
-  `[Unreleased]` still pointed at `v0.9.0...HEAD` and no `[0.9.1]` line existed,
-  an oversight from the 0.9.1 release itself.
+  `[Unreleased]` still pointed at `v0.9.0...HEAD` and no `[0.9.1]` line existed.
 
 ## [0.9.1] - 2026-08-27
 
@@ -1032,7 +1060,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.5...HEAD
+[0.9.5]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.1...v0.9.2
