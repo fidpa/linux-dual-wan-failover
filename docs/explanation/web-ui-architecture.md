@@ -153,8 +153,8 @@ small enough to audit.
 
 ## Threat model summary
 
-The full threat model lived in the original Pi-Router-internal repo
-(8 scenarios, mitigations enumerated). The shipped Web-UI inherits the
+The full threat model was developed in a predecessor project (8 scenarios,
+mitigations enumerated) and is not public. The shipped Web-UI inherits the
 same mitigations, with the relevant bits compressed into:
 
 | Threat | Mitigation |

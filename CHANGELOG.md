@@ -5,6 +5,23 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-08-27
+
+Documentation only. One sentence in the web-UI architecture document named a
+private predecessor repository by name, which told the reader where a document
+they cannot open used to live.
+
+### Fixed
+
+- **A public document no longer points readers at a repository they cannot
+  reach.** The threat-model section of
+  `docs/explanation/web-ui-architecture.md` named the private predecessor
+  repository as the place where the full model lived. It now says the model was
+  developed in a predecessor project and is not public: the same information
+  without the dead end, and without publishing the name of a repository nobody
+  outside can open. The eight scenarios and their mitigations are unchanged,
+  and the table below that sentence still carries the ones that matter here.
+
 ## [0.9.3] - 2026-08-27
 
 A second editorial pass, this time against a written style guide rather than by
@@ -1015,7 +1032,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.0...v0.9.1
