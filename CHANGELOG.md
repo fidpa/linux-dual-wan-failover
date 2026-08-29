@@ -5,6 +5,78 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8] - 2026-08-29: The failback nobody waited long enough for
+
+`safe-failover-testing.md` had not been touched since v0.3.0 while
+`failover-monitor.sh` and `routing.sh` moved through eight releases. The
+runbook still promised a failback "within 5 minutes", quoted log lines the
+daemon does not emit, and closed with a reset recipe that does the opposite of
+what it claims. Anyone following it would conclude their failback was broken
+about 55 minutes before it was due.
+
+Documentation only. No code, configuration or on-disk format changed.
+
+#### Documentation corrected against the code
+
+- **The runbook told operators to expect a failback in five minutes; the
+  daemon will not consider one for an hour.** It named only
+  `RECOVERY_THRESHOLD` x `CHECK_INTERVAL` (about 5 min) and omitted the two
+  gates that dominate: `MIN_BACKUP_TIME` (3600 s) and `MIN_STABLE_DURATION`
+  (900 s), both enforced in `is_failback_needed()`. The document now opens with
+  a table of all four gates, states that they are cumulative, and quotes the
+  suppression line the daemon logs each round
+  ("Failback suppressed by MIN_BACKUP_TIME") so the wait is recognisable as the
+  system working. A new section shows how to lower the two time gates for the
+  duration of a test, and how to put them back.
+
+- **Its "reset after testing" recipe does the opposite of what it says.** It
+  called `systemctl restart failover-monitor route-guardian` a "hard-reset all
+  routes to the example-config baseline". The daemon deliberately re-reads the
+  active WAN from the kernel routing table on startup, precisely so a restart
+  during an in-flight failover does not reset the demoted metric. After a test
+  you stay on the backup. The section now says so and gives three real ways
+  back: wait for the failback, request a manual one through the Web-UI, or
+  restore the metric by hand.
+
+- **Three quoted log lines did not exist.** "USR1 received: instant failover",
+  "Failover triggered: eth0 -> lte0" and "Recovery threshold reached: eth0
+  stable" were paraphrases. The actual strings are
+  "USR1 signal received - processing instant failover check",
+  "Failover triggered: eth0=<score>, lte0=<score> (delta >20, ...)" and, on the
+  failback side, "Stability requirements met: ..." followed by
+  "PREFER PRIMARY: ...". A runbook whose grep patterns do not match is worse
+  than one that quotes nothing.
+
+- **The PID file it named is not the one the daemon writes.**
+  `failover-monitor.sh` writes `/run/failover-monitor.pid`, which is also what
+  `nmcli-failover-monitor` reads before signalling. The runbook pointed at
+  `/run/linux-dual-wan-failover/failover-monitor.pid`, following the `PIDFile=`
+  directive in the unit rather than the code. It now names the file the daemon
+  writes and prefers `systemctl show -p MainPID` for the liveness check. The
+  divergence between unit, code and the remaining documents is a separate open
+  finding, not fixed here.
+
+- **The score-collapse trigger worked, but for reasons the document got
+  wrong.** It presented blocking the four `CHECK_IPS` as an unexplained recipe.
+  The score is a sum of four probes of 25 points each, and blocking those four
+  addresses removes two of them at once, because the DoH resolvers sit at
+  8.8.8.8 and 1.1.1.1. The result is 50, just under the threshold of 60. The
+  document now shows that arithmetic, because it also shows the failure mode:
+  with `CHECK_IPS` that exclude the DoH addresses, the total is 75 and nothing
+  happens. The cleanup advice changed too: a dedicated `inet failover_test`
+  table instead of `nft flush ruleset`, which took out every other rule on the
+  box.
+
+- **The README described a scoring loop the daemon does not run.** It listed
+  "latency, packet loss, DNS time, gateway reachability". The active path is
+  `calculate_interface_score()` in `performance.sh`: `CHECK_IPS` reachability
+  (0 to 25, proportional) plus DNS-over-HTTPS, gateway ping and HTTP fetch
+  (25 each), then the cellular bonus, the end-to-end penalty and the backup
+  quota cap. The weighted 40/30/30 variant in `network.sh` reads like the real
+  formula and is not: nothing calls `calculate_weighted_score()`. The README
+  now summarises the four probes and points at
+  `docs/reference/scoring.md`, which had it right all along.
+
 ## [0.9.7] - 2026-08-29: The README measured against the code
 
 The detailed documentation under `docs/` has been kept honest release by
@@ -1172,7 +1244,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.7...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.8...HEAD
+[0.9.8]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.4...v0.9.5

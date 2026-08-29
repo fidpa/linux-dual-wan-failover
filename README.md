@@ -128,9 +128,14 @@ Four cooperating systemd services:
   five-second timeout, the event is written off as a false alarm and no
   failover happens.
 - **`failover-monitor`** is the slow lane. It runs a scoring loop every
-  `CHECK_INTERVAL` seconds (latency, packet loss, DNS time, gateway
-  reachability), applies anti-flap and the failback gating below, and chooses
-  the winner. It's also the orchestrator that the event lane signals.
+  `CHECK_INTERVAL` seconds and sums four probes per interface: reachability of
+  the `CHECK_IPS` (0 to 25, proportional), DNS-over-HTTPS, the gateway ping and
+  an HTTP fetch (25 each, all-or-nothing). Cellular links get a bonus, a slow
+  uplink gets a penalty from `wan_quality.prom`, and an exhausted backup quota
+  caps the backup's score. It applies anti-flap and the failback gating below
+  and chooses the winner. It's also the orchestrator that the event lane
+  signals. The full formula is in
+  [`docs/reference/scoring.md`](docs/reference/scoring.md).
 - **`route-guardian`** is the cleanup crew. NetworkManager has a habit of
   re-adding routes you don't want; the guardian sweeps the routing table every
   `ROUTE_GUARDIAN_CHECK_INTERVAL` seconds (10 s by default) and deletes the
