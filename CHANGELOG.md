@@ -5,6 +5,80 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-08-29: The README measured against the code
+
+The detailed documentation under `docs/` has been kept honest release by
+release. The README had not: it still described the failback design of v0.8.x,
+three timings that no code path produces, and a Web-UI security posture that
+listed every defence except the missing one. This section is the result of
+reading it line by line against `src/`, the way `docs/explanation/` was read in
+v0.9.1 and v0.9.3.
+
+Documentation only. No code, configuration or on-disk format changed.
+
+#### Documentation corrected against the code
+
+- **The README told operators to wait for a primary score above 80 that the
+  daemon never checks.** Its "Asymmetric thresholds prevent flapping" section
+  described a 20-point hysteresis gap: fail over below 60, fail back above 80.
+
+  That path was removed in v0.4.0. It required a primary score above 90 while
+  the `MIN_FAILBACK_SCORE` gate above it already returned for every score of 60
+  or more, so it was unreachable before it was deleted. Failback is governed by
+  `RECOVERY_THRESHOLD` (20), `MIN_BACKUP_TIME` (3600 s), `MIN_STABLE_DURATION`
+  (900 s) and `MIN_FAILBACK_SCORE` (60), which the section now lists as a table
+  of gates.
+
+  `docs/explanation/anti-flapping.md` was corrected in that same release and has
+  described the time-domain gates correctly ever since. The README kept the
+  score-domain version through the fifteen tags that followed, so anyone
+  debugging a failback that would not fire had two documents in front of them
+  and no way to tell which one the daemon agreed with.
+
+- **Three timing claims were faster than the code that produces them.** Event
+  detection was described as having "confirmed the link is really down" within
+  500 ms. 500 ms is the poll interval of `wait_for_link_down()` in
+  `nmcli-failover-monitor.sh`, which polls against a five-second timeout and
+  writes the event off as a false alarm if the link returns first.
+  `route-guardian` was said to delete duplicate routes "within one second of
+  them appearing"; it sweeps once per `ROUTE_GUARDIAN_CHECK_INTERVAL` (10 s by
+  default) and removes what it finds in that same pass. The comparison table
+  claimed a failover time of under 5 s while the results table two sections
+  below reported the measured 4 to 6 s.
+
+- **The Web-UI section listed the dashboard's defences and omitted that it has
+  no login.** It enumerated the CSRF check, the rate limit and the audit log,
+  which reads as a security posture rather than as what it is: defence in depth
+  behind a perimeter the reverse proxy has to provide. The section now states
+  that there is no authentication, that the proxy is the boundary, and what to
+  terminate there when the deployment is not a trusted LAN. The reasoning was
+  already written down in `docs/explanation/web-ui-architecture.md`; the README
+  simply never pointed at it. The rate limit was also given as a flat
+  "1 / 60 s per source-IP": the buckets are per (endpoint, source IP) and run
+  from 10 s on `/api/diag` to 300 s on a monitor restart.
+
+- **Production runtime was stated twice with numbers that contradicted each
+  other.** "8+ months" appeared in the introduction and the compatibility
+  table, against "12 months (Aug 2025 to Aug 2026)" in the results table. All
+  three now derive from the August 2025 start date.
+
+- **The comparison table treated pfSense and UniFi as one closed product.**
+  pfSense CE is Apache-2.0 and mwan3 is shell rather than the kernel-tied C the
+  table claimed. The failover-time row also mixed one measured column with
+  three taken from other projects' documentation without saying so; a sentence
+  above the table now says which is which.
+
+#### Editorial
+
+- **Typography and repetition.** Em-dashes, en-dashes, arrows and the
+  multiplication sign are gone from the prose, bringing the README in line with
+  the changelog convention adopted in v0.9.2. The ASCII-art diagram keeps its
+  box-drawing characters, which that convention exempts. Removed with them: the
+  maintained `~12.5 kLOC` figure, the "~3x higher" failback failure rate that
+  named no counting basis, a duplicated hardware description, and the second of
+  two "contributions welcome" closings. The two plugin directory listings now
+  show what those directories actually contain.
+
 ## [0.9.6] - 2026-08-28: Release titles come from the changelog headings
 
 Every published release carries a headline in its title, but no changelog
@@ -1098,7 +1172,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.6...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.7...HEAD
+[0.9.7]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.3...v0.9.4

@@ -10,11 +10,11 @@
 
 **Sub-10s WAN failover for Linux dual-WAN routers, driven by NetworkManager events.**
 
-> Detect a dead primary uplink in under five seconds, switch to the backup
-> without dropping established connections, clean up stale routes in under one
-> second, and recover automatically when the primary comes back. All in pure
-> Bash + a Python metrics collector, on any Linux box with `systemd` and
-> `iproute2`.
+> Detect a dead primary uplink within a five-second confirmation window, switch
+> to the backup without dropping established connections, clean up the stale
+> routes NetworkManager leaves behind, and recover automatically when the
+> primary comes back. All in pure Bash plus a Python metrics collector, on a
+> Linux box with `systemd` and `iproute2`.
 
 ## Why this exists
 
@@ -22,11 +22,11 @@ If you self-host a Linux router/gateway with a primary uplink (DSL, fiber,
 cable, second wired ISP) plus a backup uplink (LTE/4G/5G modem, second WAN),
 you've probably hit one of these problems:
 
-- **`pfSense` / `UniFi UDM`** are excellent but proprietary, expensive, and
-  failover takes 30–60 s. They also don't play nicely with consumer LTE
-  modems.
-- **`mwan3` (OpenWrt)** is good but tied to OpenWrt's network stack —
-  hard to integrate on a standard Linux box.
+- **`pfSense` / `UniFi UDM`** are mature and well-tested, but they want to own
+  the whole router. Bolting one onto an existing Linux box is not the intended
+  shape, and consumer LTE modems are a recurring sore spot.
+- **`mwan3` (OpenWrt)** is good but tied to OpenWrt's network stack, which
+  makes it hard to integrate on a standard Linux box.
 - **`keepalived` / `VRRP`** is for active-active HA between _routers_, not
   for steering a single router between two upstream uplinks.
 - **Manually scripting it** with `ping` + `ip route` works until the first
@@ -34,19 +34,24 @@ you've probably hit one of these problems:
   with NetworkManager, and stale `conntrack` state.
 
 This project is what fell out of running a homelab dual-WAN setup (DSL
-primary, LTE backup) for 8+ months and writing down every pitfall.
+primary, LTE backup) since August 2025 and writing down every pitfall.
 
 ## Comparison
 
+The numbers below describe each project's *default* configuration, taken from
+its own documentation. Only the first column is measured here (see
+[Real-World Results](#real-world-results)); the others are not, and all of them
+can be tuned.
+
 | | linux-dual-wan-failover | pfSense / UniFi | mwan3 (OpenWrt) | DIY shell script |
 |---|---|---|---|---|
-| Failover time | **< 5 s** (event-driven) | 30–60 s (polling) | 5–15 s | depends |
-| Linux distro | any with systemd + NetworkManager | proprietary | OpenWrt only | any |
-| Cost | free | $300–500 / device | free | free |
+| Failover time | 4 to 6 s (event-driven) | 30 to 60 s (polling) | 5 to 15 s | depends |
+| Linux distro | systemd + NetworkManager | ships its own OS | OpenWrt only | any |
+| Cost | free | pfSense CE free, UniFi is hardware | free | free |
 | Quota-aware | yes (plugin) | no | no | no |
-| Anti-flap & hysteresis | yes | yes | yes | usually broken |
+| Anti-flap and hysteresis | yes | yes | yes | usually broken |
 | Last-resort failover | yes (opt-in) | no | no | no |
-| Source you can read | ~12.5 kLOC Bash + Python, MIT | closed | C, kernel-tied | yours |
+| Source you can read | Bash + Python, MIT | pfSense CE Apache-2.0, UniFi closed | shell, GPL, OpenWrt-tied | yours |
 
 ## Use Cases
 
@@ -59,9 +64,9 @@ primary, LTE backup) for 8+ months and writing down every pitfall.
 
 **Not recommended for:**
 
-- Enterprise edge with redundant upstream routers — use BGP or OSPF.
-- Cloud-only setups without physical WAN hardware — there are no NetworkManager events to detect.
-- Active-active load-balancing across two uplinks — this is active-passive failover only.
+- Enterprise edge with redundant upstream routers. Use BGP or OSPF.
+- Cloud-only setups without physical WAN hardware: there are no NetworkManager events to detect.
+- Active-active load-balancing across two uplinks. This is active-passive failover only.
 
 ## Requirements
 
@@ -82,10 +87,10 @@ primary, LTE backup) for 8+ months and writing down every pitfall.
 
 | Distribution | Architecture | Status |
 |---|---|---|
-| Raspberry Pi OS Bookworm | aarch64 | Tested in production (8+ months) |
+| Raspberry Pi OS Bookworm | aarch64 | Tested in production (since August 2025) |
 | Other systemd + NetworkManager distros | any | Expected to work, untested |
-| Alpine Linux | any | Unsupported — no NetworkManager |
-| OpenWrt | any | Unsupported — use mwan3 instead |
+| Alpine Linux | any | Unsupported: no NetworkManager |
+| OpenWrt | any | Unsupported, use mwan3 instead |
 
 ## How it works
 
@@ -94,7 +99,7 @@ Four cooperating systemd services:
 ```
 ┌────────────────────────────┐         ┌──────────────────────────────┐
 │ nmcli-failover-monitor     │  USR1   │ failover-monitor             │
-│ Event Detection (<500 ms)  │────────▶│ Orchestrator (polling 15-30s)│
+│ Link-down poll every 500 ms│────────▶│ Orchestrator: polls every 15s│
 │ parses `nmcli monitor`     │         │ Score-based 0-100 logic      │
 │ writes lockfile            │         │ Switches default route       │
 └────────────────────────────┘         └──────────────────────────────┘
@@ -104,7 +109,7 @@ Four cooperating systemd services:
                                        ┌──────────────────────────────┐
                                        │ route-guardian               │
                                        │ Route enforcement (every 10s)│
-                                       │ Cleans stale duplicates < 1s │
+                                       │ Removes duplicate routes     │
                                        │ Respects failover lockfile   │
                                        └──────────────────────────────┘
                                                     │
@@ -117,48 +122,54 @@ Four cooperating systemd services:
 ```
 
 - **`nmcli-failover-monitor`** is the fast lane. NetworkManager emits a
-  `disconnected` event for the WAN connection, and within 500 ms the monitor
-  has confirmed the link is really down and signalled the orchestrator
-  (`SIGUSR1`).
-- **`failover-monitor`** is the slow lane. It runs a periodic scoring loop
-  (latency, packet loss, DNS time, gateway reachability), applies anti-flap
-  and hysteresis, and chooses the winner. It's also the orchestrator that
-  the event lane signals.
+  `disconnected` event for the WAN connection; the monitor then polls
+  `ip link` every 500 ms until the interface has really left `state UP`, and
+  signals the orchestrator (`SIGUSR1`). If the link comes back before the
+  five-second timeout, the event is written off as a false alarm and no
+  failover happens.
+- **`failover-monitor`** is the slow lane. It runs a scoring loop every
+  `CHECK_INTERVAL` seconds (latency, packet loss, DNS time, gateway
+  reachability), applies anti-flap and the failback gating below, and chooses
+  the winner. It's also the orchestrator that the event lane signals.
 - **`route-guardian`** is the cleanup crew. NetworkManager has a habit of
-  re-adding routes you don't want; the guardian deletes duplicates within
-  one second of them appearing.
-- **`failover-metrics-collector`** is observability. Prometheus textfile
-  output for Grafana, plus a SQLite event log you can query after an
-  incident.
+  re-adding routes you don't want; the guardian sweeps the routing table every
+  `ROUTE_GUARDIAN_CHECK_INTERVAL` seconds (10 s by default) and deletes the
+  duplicates it finds in that same pass, unless a failover is in progress.
+- **`failover-metrics-collector`** writes Prometheus textfile output for
+  Grafana plus a SQLite event log you can query after an incident.
 
 For the rationale behind splitting detection and orchestration, see
 [`docs/explanation/why-dual-service.md`](docs/explanation/why-dual-service.md).
 
 ## Real-World Results
 
-Running on a single hardware setup (Raspberry Pi 5, DSL primary + Netgear LM1200 LTE backup)
-since August 2025:
+Measured on one hardware setup: a Raspberry Pi 5 with a DSL primary and a
+Netgear LM1200 LTE backup, in continuous use since August 2025. These are
+single-deployment numbers, not a benchmark across hardware.
 
 | Metric | Value |
 |--------|-------|
-| Production runtime | 12 months (Aug 2025 – Aug 2026) |
-| Failover events recorded | 447 (counted through Apr 2026) |
-| Typical failover latency (event path) | 4–6 s |
-| Typical failover latency (polling fallback) | 60–90 s |
-| Failback failure rate | ~3× higher than failover failure rate |
+| Production runtime | 12 months (August 2025 to August 2026) |
+| Failover events recorded | 447 (event DB, August 2025 through April 2026) |
+| Typical failover latency (event path) | 4 to 6 s |
+| Typical failover latency (polling fallback) | 60 to 90 s |
 
-The higher failback failure rate is a known asymmetry — the `route-guardian`'s
-`emergency_restore_any_route` exists specifically to recover from failed failbacks.
-See [`docs/explanation/anti-flapping.md`](docs/explanation/anti-flapping.md) for details.
+Failbacks fail noticeably more often than failovers on this deployment, which
+is why `route-guardian` carries an `emergency_restore_any_route` path at all.
+The reason is structural rather than statistical, and it is spelled out under
+[Failback is more dangerous than failover](#failback-is-more-dangerous-than-failover).
+See [`docs/explanation/anti-flapping.md`](docs/explanation/anti-flapping.md)
+for the full write-up.
 
 ## Key Concepts
 
 ### Metric demotion, not link toggling
 
-Failover changes the Linux routing metric of the primary interface (`50 → 500`),
-not the link state. The backup interface keeps its metric (`200`) and becomes the
-lowest-metric default route. This means the primary interface stays up, DHCP leases
-are preserved, and recovery is as simple as demoting the metric back.
+Failover changes the Linux routing metric of the primary interface (`50` to
+`500`), not the link state. The backup interface keeps its metric (`200`) and
+becomes the lowest-metric default route. This means the primary interface stays
+up, DHCP leases are preserved, and recovery is as simple as demoting the metric
+back.
 
 ### The lockfile is signalling, not locking
 
@@ -171,14 +182,19 @@ See [`docs/explanation/state-file-ownership.md`](docs/explanation/state-file-own
 
 ### Every failover has a Correlation-ID
 
-A failover crosses four services (`nmcli-failover-monitor` → `failover-monitor` →
-`routing.sh` → `route-guardian`) plus the metrics collector. Each event gets one
-**Event-ID** (the `PID_TIMESTAMP` lockfile content), minted at the earliest detection
-point, handed across the USR1/lockfile boundaries, stamped into every service log as
-`FAILOVER_EVENT_ID=<id>`, and written to the `event_id` column of the events database.
-This is the same idea as a distributed-tracing trace ID: it turns per-service logs that
-each see only their own slice into one reconstructable timeline. Trace a single failover
-end-to-end — symptom (DB row) to cause (service-log waterfall) — with:
+A failover crosses four services (`nmcli-failover-monitor` to
+`failover-monitor` to `routing.sh` to `route-guardian`) plus the metrics
+collector. Each event gets one **Event-ID**, the `PID_TIMESTAMP` lockfile
+content, minted at the earliest detection point and handed across the
+USR1/lockfile boundaries.
+
+It is stamped into every service log as `FAILOVER_EVENT_ID=<id>` and written to
+the `event_id` column of the events database. This is the same idea as a
+distributed-tracing trace ID: it turns per-service logs that each see only their
+own slice into one reconstructable timeline.
+
+Trace a single failover end-to-end, from the symptom (a DB row) to the cause (a
+service-log waterfall), with:
 
 ```bash
 src/tools/trace-failover.sh --list 10   # recent events with their Event-IDs
@@ -187,12 +203,42 @@ src/tools/trace-failover.sh <PID_TIMESTAMP>
 
 See [`docs/how-to/trace-failover.md`](docs/how-to/trace-failover.md).
 
-### Asymmetric thresholds prevent flapping
+### Failing over is cheap, failing back is gated
 
-The orchestrator uses a 20-point hysteresis gap: fail over when the primary drops below
-60, fail back only when it recovers above 80. Combined with a consecutive-check requirement
-(5 failures to trigger failover, 20 successes to trigger failback), this makes the system
-immune to transient link-quality oscillations.
+The two directions are deliberately asymmetric. A failover fires once the
+primary scores below `FAILOVER_THRESHOLD_DOWN` (60) for `FAILURE_THRESHOLD` (5)
+consecutive checks, which at a 15 s `CHECK_INTERVAL` is about 75 s of
+tolerance. An emergency score below `EMERGENCY_THRESHOLD` (15) skips the
+counter entirely.
+
+Failback has to clear four independent gates, all of them at their default
+values here:
+
+| Gate | Default | Meaning |
+|---|---|---|
+| `RECOVERY_THRESHOLD` | 20 | consecutive healthy checks, about 5 min |
+| `MIN_BACKUP_TIME` | 3600 s | minimum time on the backup after a failover |
+| `MIN_STABLE_DURATION` | 900 s | uninterrupted primary stability |
+| `MIN_FAILBACK_SCORE` | 60 | primary score at the moment of the decision |
+
+Any primary score below `FAILOVER_THRESHOLD_DOWN` restarts the stability
+window, so a flapping link never accumulates the 900 s it needs. That is where
+the anti-flapping behaviour comes from: not from a score gap, but from a time
+gate that a flapping link cannot satisfy.
+
+Earlier releases documented a 20-point hysteresis gap
+(`FAILOVER_THRESHOLD_UP=80`, `HYSTERESIS_GAP=20`). That path was unreachable:
+it required a primary score above 90, but the `MIN_FAILBACK_SCORE` gate above
+it already returned for every score of 60 or more. It was removed, and both
+variables survive only as commented-out documentation in
+`config/failover.conf.example`. Neither is read anywhere in the daemon, which
+you can check for yourself:
+
+```bash
+grep -rn 'FAILOVER_THRESHOLD_UP\|HYSTERESIS_GAP' src/services/ src/lib/   # no output
+```
+
+If you have them set in an existing config, they do nothing.
 
 ### Failback is more dangerous than failover
 
@@ -233,11 +279,11 @@ For a five-minute walk-through with a fictional setup, see
 ## Configuration
 
 All configuration lives in `/etc/linux-dual-wan-failover/failover.conf`. The
-example file at `config/failover.conf.example` documents every variable;
-representative settings:
+example file at `config/failover.conf.example` documents every variable with
+its default and the reasoning behind it; representative settings:
 
 ```bash
-# Interfaces (no defaults — you must set these for your setup)
+# Interfaces (no defaults, you must set these for your setup)
 PRIMARY_IFACE=eth0
 BACKUP_IFACE=lte0
 
@@ -252,6 +298,11 @@ BACKUP_METRIC=200
 
 # Health-check targets
 CHECK_IPS=("8.8.8.8" "1.1.1.1" "9.9.9.9" "208.67.222.222")
+
+# Failback gating (see "Failing over is cheap, failing back is gated")
+MIN_FAILBACK_SCORE=60
+MIN_BACKUP_TIME=3600
+MIN_STABLE_DURATION=900
 
 # Optional plugins
 ALERTING_BACKEND=none           # none | mattermost | webhook
@@ -277,22 +328,35 @@ your reverse proxy in front of it (the repo ships
 as a starting point), point your browser at it, and you have:
 
 - live state, latency, loss, jitter, DNS/HTTP scores per interface;
-- 30-day failover event history (read-only from the metrics SQLite DB), with a
-  **Trace** column exposing each event's Correlation-ID for cross-service tracing;
+- failover event history from the metrics SQLite DB, read-only, 30 days by
+  default, with a **Trace** column exposing each event's Correlation-ID for
+  cross-service tracing;
 - whitelisted config tuning (15 keys, range-validated, root-owned installer
   re-validates before write);
-- 1 / 60 s rate-limit per source-IP, CSRF + Origin/Referer check, JSON-Lines
-  audit log, alerting on every mutation through the same plugin contract
-  as the daemon.
+- a per-(endpoint, source-IP) rate limit, CSRF plus Origin/Referer check,
+  JSON-Lines audit log, and alerting on every mutation through the same plugin
+  contract as the daemon. The limits differ by how expensive the action is:
+  `/api/failback` is 1 per 60 s, `force-failover` 1 per 120 s, a monitor
+  restart 1 per 300 s.
 
-The Web-UI is **opt-in**. If you don't install it, the daemon's
+> [!IMPORTANT]
+> **The dashboard has no login screen, and that is a deliberate trade, not an
+> oversight.** Its security rests on the reverse proxy in front of it: the
+> Flask process binds to `127.0.0.1` only, and anyone who reaches the proxy
+> reaches the operator buttons. The CSRF check, the rate limits and the audit
+> log raise the cost of an attack from inside that perimeter, but they are not
+> the perimeter. If your deployment is multi-tenant, internet-exposed, or on a
+> LAN you don't trust, terminate authentication in the proxy (mTLS, SAML, basic
+> auth); the web app's only contract with it is
+> `X-Forwarded-For = $remote_addr`. The reasoning is laid out in
+> [`docs/explanation/web-ui-architecture.md`](docs/explanation/web-ui-architecture.md).
+
+The Web-UI is opt-in. If you don't install it, the daemon's
 `process_manual_action_request` is a cheap `stat()` per loop iteration
 when the trigger file is absent. See
 [`docs/how-to/configure-web-ui.md`](docs/how-to/configure-web-ui.md) for
-setup, [`docs/reference/web-api.md`](docs/reference/web-api.md) for the
-endpoint surface, and
-[`docs/explanation/web-ui-architecture.md`](docs/explanation/web-ui-architecture.md)
-for the privilege model and threat model.
+setup and [`docs/reference/web-api.md`](docs/reference/web-api.md) for the
+endpoint surface.
 
 ## Plugins
 
@@ -303,6 +367,7 @@ support your modem or chat platform.
 
 ```
 plugins/alerting/
+├── README.md       # the plugin contract
 ├── none.sh         # default: silent
 ├── mattermost.sh   # forwards to a Mattermost incoming webhook
 └── webhook.sh      # generic POST to any URL
@@ -314,6 +379,8 @@ Selected via `ALERTING_BACKEND=mattermost` in `failover.conf`.
 
 ```
 plugins/quota-providers/
+├── README.md          # snapshot schema and provider contract
+├── _schema/           # JSON Schema for the snapshot file
 ├── no-op/             # default: no quota awareness
 ├── netgear-lm1200/    # reference implementation (Sierra Wireless D86)
 └── custom-template/   # skeleton for your own modem
@@ -322,7 +389,7 @@ plugins/quota-providers/
 A quota provider runs as its own systemd timer, queries your modem (or your
 ISP's customer portal, or anything else), and writes a JSON snapshot. The
 failover scoring logic reads the snapshot and caps the backup-link score
-when you're approaching your monthly quota — so you don't pay overage fees
+when you're approaching your monthly quota, so you don't pay overage fees
 for a flaky-but-not-dead primary.
 
 See [`plugins/quota-providers/README.md`](plugins/quota-providers/README.md)
@@ -332,10 +399,11 @@ for the schema and how to write your own.
 
 **Beta.** The current release is tagged in
 [`CHANGELOG.md`](CHANGELOG.md); the latest tag is shown in the release badge
-above. Core failover and routing has been running in production on a single
-hardware setup (Raspberry Pi 5 + DSL + Netgear LM1200) since August 2025, and
-every release since the first public cut has been driven by findings from that
-deployment — the changelog entries are incident write-ups, not feature lists.
+above. Core failover and routing has been running in production on the single
+deployment described under [Real-World Results](#real-world-results) since
+August 2025, and every release since the first public cut has been driven by
+findings from it. The changelog entries are incident write-ups, not feature
+lists.
 
 The version is still `0.x`: the config surface and the on-disk contracts may
 change between minor releases. Breaking changes and migrations are called out
@@ -345,14 +413,14 @@ Expect:
 
 - Rough edges in the install path on non-Debian distros
 - Limited modem/ISP plugin coverage (currently just LM1200)
-- Documentation gaps; PRs welcome
+- Documentation gaps
 
 See [`CHANGELOG.md`](CHANGELOG.md) and the GitHub issue tracker for the
 roadmap.
 
 ## Documentation
 
-- [Tutorial: Quickstart](docs/tutorial/01-quickstart.md) — 5 minutes, fictional setup
+- [Tutorial: Quickstart](docs/tutorial/01-quickstart.md), 5 minutes, fictional setup
 - [How-to: install from source](docs/how-to/install-from-source.md)
 - [How-to: configure Mattermost alerting](docs/how-to/configure-mattermost.md)
 - [How-to: configure quota tracking](docs/how-to/configure-quota-tracking.md)
@@ -378,15 +446,15 @@ contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## See Also
 
-- [bash-production-toolkit](https://github.com/fidpa/bash-production-toolkit) — Production Bash libraries (logging, secure file I/O, alerting) used by this project.
-- [netgear-lm1200-sms-gateway](https://github.com/fidpa/netgear-lm1200-sms-gateway) — SMS gateway for the same modem family used by the reference quota plugin.
-- [linux-monitoring-templates](https://github.com/fidpa/linux-monitoring-templates) — Prometheus/Grafana templates that pair with `failover-metrics-collector`.
-- [mwan3 (OpenWrt)](https://openwrt.org/docs/guide-user/network/wan/multiwan/mwan3) — The OpenWrt-native equivalent referenced in the comparison table.
-- [Diataxis](https://diataxis.fr/) — The documentation framework these `docs/` follow.
+- [bash-production-toolkit](https://github.com/fidpa/bash-production-toolkit): production Bash libraries (logging, secure file I/O, alerting) used by this project.
+- [netgear-lm1200-sms-gateway](https://github.com/fidpa/netgear-lm1200-sms-gateway): SMS gateway for the same modem family used by the reference quota plugin.
+- [linux-monitoring-templates](https://github.com/fidpa/linux-monitoring-templates): Prometheus/Grafana templates that pair with `failover-metrics-collector`.
+- [mwan3 (OpenWrt)](https://openwrt.org/docs/guide-user/network/wan/multiwan/mwan3): the OpenWrt-native equivalent referenced in the comparison table.
+- [Diataxis](https://diataxis.fr/): the documentation framework these `docs/` follow.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT, see [`LICENSE`](LICENSE).
 
 This project draws on patterns from
 [`bash-production-toolkit`](https://github.com/fidpa/bash-production-toolkit)
