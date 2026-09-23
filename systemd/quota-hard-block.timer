@@ -1,0 +1,14 @@
+[Unit]
+Description=Timer for the backup-link quota hard block
+Documentation=https://github.com/fidpa/linux-dual-wan-failover/blob/main/docs/how-to/configure-quota-tracking.md
+
+[Timer]
+# Soon after boot (restores the block if nftables.conf has no include line),
+# then at the cadence the quota providers poll.
+OnBootSec=30s
+OnUnitActiveSec=5min
+AccuracySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

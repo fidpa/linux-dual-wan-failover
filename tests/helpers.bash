@@ -40,6 +40,11 @@ setup_test_env() {
     export QUOTA_CAP_TIER_90=40
     export QUOTA_CAP_TIER_96=10
     export QUOTA_CAP_TIER_100=0
+    # Hard block off and its state under TMPROOT — never the host's /var/lib.
+    export QUOTA_HARD_BLOCK=false
+    export QUOTA_HARD_BLOCK_PCT=99
+    export QUOTA_HARD_BLOCK_ALLOW=""
+    export QUOTA_HARD_BLOCK_STATE_DIR="$STATE_DIR/quota-block"
 
     # Disable toolkit lookup so common.sh uses its fallback logger.
     unset TOOLKIT_LIB

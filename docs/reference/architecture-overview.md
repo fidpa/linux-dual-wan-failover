@@ -62,7 +62,8 @@ orchestrator.
 | Pending Event-ID | `/run/linux-dual-wan-failover/wan-state/pending_failover_id` | `<PID>_<TIMESTAMP>` | nmcli-failover-monitor (written **before** USR1, so the trap does no I/O) | failover-monitor (adopts and consumes it) |
 | Last Event-ID | `/run/linux-dual-wan-failover/wan-state/last_failover_id` | `<PID>_<TIMESTAMP>` | routing.sh / nmcli-failover-monitor | metrics-collector (`event_id` DB column) |
 | Manual action | `/run/linux-dual-wan-failover/wan-state/manual_action.json` | JSON | failover-web (optional) | failover-monitor (30 s freshness + request-ID dedup) |
-| Quota snapshot | `/var/lib/linux-dual-wan-failover/quota-snapshot.json` | JSON (schema in `plugins/quota-providers/_schema/`) | quota provider | failover-monitor |
+| Quota snapshot | `/var/lib/linux-dual-wan-failover/quota-snapshot.json` | JSON (schema in `plugins/quota-providers/_schema/`) | quota provider | failover-monitor, quota-hard-block |
+| Quota hard block | `/var/lib/linux-dual-wan-failover-quota-block/quota-block.nft` | nftables script; exists = blocked | quota-hard-block (opt-in, timer) | nftables (include), failover-monitor, nmcli-failover-monitor, failover-web |
 
 The lockfile uses `PID_TIMESTAMP` rather than a bare touch-file because of
 a real-world incident where a crashed nmcli-failover-monitor left a stale

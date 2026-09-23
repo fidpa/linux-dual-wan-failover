@@ -176,6 +176,15 @@ trigger_instant_failover() {
     # Fallback: Direkte Route-Manipulation (Emergency Failover)
     log_warning "Haupt-Failover-Script nicht gefunden - führe Emergency Failover aus"
 
+    # Quota hard block: deleting the primary route would push the kernel onto
+    # the backup, where nftables drops every packet — a primary flap would
+    # turn into a total outage.
+    if [[ "$interface" == "$PRIMARY_IFACE" ]] && \
+       [[ -f "${QUOTA_HARD_BLOCK_STATE_DIR:-/var/lib/linux-dual-wan-failover-quota-block}/quota-block.nft" ]]; then
+        log_warning "Emergency failover skipped: backup-link quota hard block active"
+        return 0
+    fi
+
     if [[ "$interface" == "$PRIMARY_IFACE" ]]; then
         # Emergency path reuses the same failover Event-ID minted above — one
         # failover == one ID across all paths. Lockfile content stays in the

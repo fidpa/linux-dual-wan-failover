@@ -30,7 +30,9 @@ discipline that doesn't require any locking on the read side.
 | `/run/linux-dual-wan-failover/wan-state/last_failover_id` | `routing.sh` / `nmcli-failover-monitor` (== lockfile ID) | `failover-metrics-collector` |
 | `/run/linux-dual-wan-failover/wan-state/last_failover` | `failover-monitor` (after each route change) | `failover-web` (anti-flapping pre-check) |
 | `/run/linux-dual-wan-failover/wan-state/last_failover_to_backup` | `failover-monitor` (on failover to backup; reseeded at startup if missing while on backup) | `failover-monitor` (`MIN_BACKUP_TIME`, emergency-failback gate, prolonged-backup alert) |
-| `/var/lib/linux-dual-wan-failover/quota-snapshot.json` | quota-provider plugin | `failover-monitor` |
+| `/var/lib/linux-dual-wan-failover/quota-snapshot.json` | quota-provider plugin | `failover-monitor`, `quota-hard-block` |
+| `/var/lib/linux-dual-wan-failover-quota-block/quota-block.nft` | `quota-hard-block` (opt-in; exists = blocked) | nftables (`include`), `failover-monitor`, `nmcli-failover-monitor`, `failover-web` |
+| `/var/lib/linux-dual-wan-failover-quota-block/last_days_left` | `quota-hard-block` | `quota-hard-block` (only; billing-cycle detection) |
 | `/var/lib/linux-dual-wan-failover/route-guardian/state.json` | `route-guardian` | route-guardian (only) |
 | `/var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db` | `failover-metrics-collector` | metrics-collector (only) |
 

@@ -43,9 +43,12 @@ Recommended (but optional):
 ├── route-guardian.service
 ├── failover-metrics-collector.service
 ├── failover-monitor-health-check.service
-└── failover-monitor-health-check.timer
+├── failover-monitor-health-check.timer
+├── quota-hard-block.service          # opt-in, see configure-quota-tracking.md
+└── quota-hard-block.timer
 
 /var/lib/linux-dual-wan-failover/    # state (auto-created by systemd StateDirectory=)
+/var/lib/linux-dual-wan-failover-quota-block/   # quota hard block state (only with QUOTA_HARD_BLOCK=true)
 /var/log/linux-dual-wan-failover/    # logs (auto-created by systemd LogsDirectory=)
 /run/linux-dual-wan-failover/        # runtime (auto-created by systemd RuntimeDirectory=)
 ```
@@ -126,11 +129,16 @@ sudo systemctl disable --now \
     nmcli-failover-monitor.service \
     route-guardian.service \
     failover-metrics-collector.service \
-    failover-monitor-health-check.timer
+    failover-monitor-health-check.timer \
+    quota-hard-block.timer
 
-sudo rm -f /etc/systemd/system/{failover-monitor,nmcli-failover-monitor,route-guardian,failover-metrics-collector,failover-monitor-health-check}.{service,timer}
+# Only if you used the quota hard block: drop the live table and the include line.
+sudo nft delete table inet ldwf_quota_block 2>/dev/null
+sudo sed -i '\#include "/var/lib/linux-dual-wan-failover-quota-block/\*.nft"#d' /etc/nftables.conf
+
+sudo rm -f /etc/systemd/system/{failover-monitor,nmcli-failover-monitor,route-guardian,failover-metrics-collector,failover-monitor-health-check,quota-hard-block}.{service,timer}
 sudo rm -rf /usr/local/lib/linux-dual-wan-failover
-sudo rm -rf /var/lib/linux-dual-wan-failover /var/log/linux-dual-wan-failover
+sudo rm -rf /var/lib/linux-dual-wan-failover /var/lib/linux-dual-wan-failover-quota-block /var/log/linux-dual-wan-failover
 
 # Optional: also remove your config.
 sudo rm -rf /etc/linux-dual-wan-failover

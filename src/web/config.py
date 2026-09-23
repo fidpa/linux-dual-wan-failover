@@ -95,6 +95,15 @@ MANUAL_ACTION_FILE: Path = Path(
         str(STATE_DIR / "manual_action.json"),
     )
 )
+# Backup-link quota hard block: while this file exists, nftables drops all
+# traffic via the backup interface (quota-hard-block.sh). Single source of
+# truth — the web UI evaluates no threshold of its own.
+QUOTA_HARD_BLOCK_FILE: Path = Path(
+    os.environ.get(
+        "FAILOVER_WEB_QUOTA_HARD_BLOCK_FILE",
+        "/var/lib/linux-dual-wan-failover-quota-block/quota-block.nft",
+    )
+)
 MANUAL_ACTION_LOCK: Path = Path(
     os.environ.get(
         "FAILOVER_WEB_MANUAL_ACTION_LOCK",

@@ -32,7 +32,7 @@ emergency_failover_time=0
 #    perform_ping_test()             Ping mit Timeout
 #    _end_to_end_penalty()           WAN-Quality-Prom-basierter Penalty (v4.8.0)
 #    _backup_quota_cap()             Backup-link Quota Cap
-#    _backup_quota_exhausted()       Quota-exhausted Check
+#    _backup_quota_blocked()         Quota-Hard-Block aktiv (Zustandsdatei)
 #
 # 2. EVENT PERFORMANCE METRICS — Signal-/Failover-Zeitmessung (→ Zeile 412)
 #    record_event_signal_latency()    Signal-Latenz aufzeichnen
@@ -172,6 +172,9 @@ _end_to_end_penalty() {
 #   ≥90%   → QUOTA_CAP_TIER_90   (default 40: primary wins at normal scores)
 #    <90%  → no cap
 #
+# An active quota hard block (_backup_quota_blocked) always yields cap 0,
+# independent of the snapshot's age.
+#
 # Returns empty (no cap) when:
 #   - QUOTA_PROVIDER=none (default; plugin disabled)
 #   - snapshot file missing
@@ -182,6 +185,11 @@ _end_to_end_penalty() {
 # command substitution, so all logs MUST go to stderr (>&2).
 # ----------------------------------------------------------------------------
 _backup_quota_cap() {
+    if _backup_quota_blocked; then
+        echo "0"
+        return 0
+    fi
+
     [[ "${QUOTA_PROVIDER:-none}" != "none" ]] || return 0
 
     local json="${QUOTA_SNAPSHOT_PATH:-/var/lib/linux-dual-wan-failover/quota-snapshot.json}"
@@ -189,6 +197,10 @@ _backup_quota_cap() {
     local tier90="${QUOTA_CAP_TIER_90:-40}"
     local tier96="${QUOTA_CAP_TIER_96:-10}"
     local tier100="${QUOTA_CAP_TIER_100:-0}"
+    # Second floor for the hard block: if the enforcer failed to write its
+    # state file, the snapshot alone still pins the score to 0.
+    local block_pct=""
+    [[ "${QUOTA_HARD_BLOCK:-false}" == "true" ]] && block_pct="${QUOTA_HARD_BLOCK_PCT:-99}"
 
     [[ -f "$json" ]] || return 0
 
@@ -205,10 +217,11 @@ _backup_quota_cap() {
     fi
 
     local result
-    result=$(python3 - "$json" "$tier90" "$tier96" "$tier100" <<'PYEOF' 2>/dev/null
+    result=$(python3 - "$json" "$tier90" "$tier96" "$tier100" "$block_pct" <<'PYEOF' 2>/dev/null
 import json, sys
 path = sys.argv[1]
 t90, t96, t100 = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+block_pct = float(sys.argv[5]) if sys.argv[5] else None
 try:
     with open(path) as f:
         d = json.load(f)
@@ -220,7 +233,9 @@ if pct is None:
     sys.exit(0)
 
 pct = float(pct)
-if pct >= 100:
+if block_pct is not None and pct >= block_pct:
+    print(0)
+elif pct >= 100:
     print(t100)
 elif pct >= 96:
     print(t96)
@@ -233,45 +248,16 @@ PYEOF
 }
 
 # ----------------------------------------------------------------------------
-# Backup-link quota fully exhausted (limit_pct >= 100 %)
+# Backup-link quota hard block active?
 # ----------------------------------------------------------------------------
-# Returns 0 (true) only when the snapshot reports limit_pct >= 100 %.
-# Returns 1 (false) for disabled provider, missing/stale snapshots, lower
-# percentages, or any parsing error — the conservative default.
-#
-# Used by failover-monitor::is_last_resort_failover_needed to distinguish
-# "backup scored 0 because real connectivity failed" (no failover possible)
-# from "backup scored 0 because the quota cap forced it to 0" (link
-# routing-layer reachable). Only the latter justifies overriding the cap.
+# The only source is the state file that quota-hard-block.sh writes and
+# nftables loads. No threshold and no staleness check here: the block holds
+# until the enforcer lifts it on a fresh reading from a new billing cycle.
+# Used by _backup_quota_cap and failover-monitor (perform_failover gate,
+# carrier pre-check, quota_block_failback).
 # ----------------------------------------------------------------------------
-_backup_quota_exhausted() {
-    [[ "${QUOTA_PROVIDER:-none}" != "none" ]] || return 1
-
-    local json="${QUOTA_SNAPSHOT_PATH:-/var/lib/linux-dual-wan-failover/quota-snapshot.json}"
-    local max_stale="${QUOTA_SNAPSHOT_MAX_STALE_SEC:-3600}"
-
-    [[ -f "$json" ]] || return 1
-
-    local mtime now age
-    mtime=$(stat -c %Y "$json" 2>/dev/null || echo 0)
-    now=$(date +%s)
-    age=$((now - mtime))
-    [[ $age -le $max_stale ]] || return 1
-
-    python3 - "$json" >/dev/null 2>&1 <<'PYEOF'
-import json, sys
-path = sys.argv[1]
-try:
-    with open(path) as f:
-        d = json.load(f)
-except (OSError, json.JSONDecodeError):
-    sys.exit(1)
-
-pct = d.get("limit_pct")
-if pct is None:
-    sys.exit(1)
-sys.exit(0 if float(pct) >= 100 else 1)
-PYEOF
+_backup_quota_blocked() {
+    [[ -f "${QUOTA_HARD_BLOCK_STATE_DIR:-/var/lib/linux-dual-wan-failover-quota-block}/quota-block.nft" ]]
 }
 
 # Test interface with multiple metrics

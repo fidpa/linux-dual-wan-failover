@@ -92,23 +92,39 @@ teardown() {
     [ -z "$output" ]
 }
 
-@test "quota exhausted: 100% → 0 (true)" {
-    QUOTA_PROVIDER=netgear-lm1200
-    make_quota_snapshot 100
-    run _backup_quota_exhausted
+@test "quota blocked: follows the hard-block state file" {
+    run _backup_quota_blocked
+    [ "$status" -eq 1 ]
+    mkdir -p "$QUOTA_HARD_BLOCK_STATE_DIR"
+    : > "$QUOTA_HARD_BLOCK_STATE_DIR/quota-block.nft"
+    run _backup_quota_blocked
     [ "$status" -eq 0 ]
 }
 
-@test "quota exhausted: 99% → 1 (false)" {
-    QUOTA_PROVIDER=netgear-lm1200
-    make_quota_snapshot 99
-    run _backup_quota_exhausted
-    [ "$status" -eq 1 ]
+@test "quota cap: active hard block → cap 0, even without provider or snapshot" {
+    QUOTA_PROVIDER=none
+    rm -f "$QUOTA_SNAPSHOT_PATH"
+    mkdir -p "$QUOTA_HARD_BLOCK_STATE_DIR"
+    : > "$QUOTA_HARD_BLOCK_STATE_DIR/quota-block.nft"
+    run _backup_quota_cap
+    [ "$status" -eq 0 ]
+    [ "$output" = "0" ]
 }
 
-@test "quota exhausted: missing snapshot → 1 (false; conservative)" {
+@test "quota cap: QUOTA_HARD_BLOCK=true → cap 0 from QUOTA_HARD_BLOCK_PCT (second floor)" {
     QUOTA_PROVIDER=netgear-lm1200
-    rm -f "$QUOTA_SNAPSHOT_PATH"
-    run _backup_quota_exhausted
-    [ "$status" -eq 1 ]
+    QUOTA_HARD_BLOCK=true
+    QUOTA_HARD_BLOCK_PCT=99
+    make_quota_snapshot 99
+    run _backup_quota_cap
+    [ "$status" -eq 0 ]
+    [ "$output" = "0" ]
+}
+
+@test "quota cap: QUOTA_HARD_BLOCK=false keeps the tier-96 cap at 99%" {
+    QUOTA_PROVIDER=netgear-lm1200
+    make_quota_snapshot 99
+    run _backup_quota_cap
+    [ "$status" -eq 0 ]
+    [ "$output" = "10" ]
 }

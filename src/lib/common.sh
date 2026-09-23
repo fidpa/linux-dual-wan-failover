@@ -122,6 +122,36 @@ if ! declare -F log_info &>/dev/null; then
     log_debug()   { [[ "${DEBUG:-0}" == 1 ]] && printf '%s [DEBUG] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 fi
 
+# The services also call levels and structured variants that only the toolkit
+# provides. Without them every such call was "command not found" (exit 127):
+# the log line was lost, and under `set -e` (bats) the caller aborted. Defined
+# one by one, so a toolkit that lacks a single function is covered too.
+# Structured signature: <message> [KEY=VALUE ...] — fields are appended.
+if ! declare -F log_notice &>/dev/null; then
+    log_notice()   { printf '%s [NOTICE] %s\n'   "$(date -u +%FT%TZ)" "$*" >&2; }
+fi
+if ! declare -F log_critical &>/dev/null; then
+    log_critical() { printf '%s [CRITICAL] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
+fi
+_log_structured_fallback() {
+    local level="$1" message="${2:-}"
+    shift
+    [[ $# -gt 0 ]] && shift
+    printf '%s [%s] %s%s\n' "$(date -u +%FT%TZ)" "$level" "$message" "${*:+ | $*}" >&2
+}
+if ! declare -F log_info_structured &>/dev/null; then
+    log_info_structured()     { _log_structured_fallback INFO "$@"; }
+fi
+if ! declare -F log_warning_structured &>/dev/null; then
+    log_warning_structured()  { _log_structured_fallback WARN "$@"; }
+fi
+if ! declare -F log_error_structured &>/dev/null; then
+    log_error_structured()    { _log_structured_fallback ERROR "$@"; }
+fi
+if ! declare -F log_critical_structured &>/dev/null; then
+    log_critical_structured() { _log_structured_fallback CRITICAL "$@"; }
+fi
+
 # ============================================================================
 # CONFIGURATION CONSTANTS
 # ============================================================================

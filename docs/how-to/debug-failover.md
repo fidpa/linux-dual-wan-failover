@@ -21,7 +21,8 @@ The most informative log lines:
 | `USR1 received: instant failover` | nmcli-failover-monitor signalled a fast failover. |
 | `Failover triggered: eth0 → lte0 (score X)` | Score-based failover. |
 | `Emergency-Failover: score below EMERGENCY_THRESHOLD` | One bad scoring round triggered failover (rare; thresholds were configured aggressively). |
-| `Last-resort failover (LAST_RESORT_ENABLED=true)` | Cap was overridden because primary went catastrophic. |
+| `Failover to lte0 blocked: quota hard block active` | `QUOTA_HARD_BLOCK` is on and the quota is used up — intended, see [configure-quota-tracking.md](configure-quota-tracking.md#hard-block-stop-all-backup-traffic-at-the-quota-opt-in). |
+| `QUOTA-BLOCK FAILBACK` | The daemon was on the backup when the block became active and switched back at once. |
 | `Failback triggered after RECOVERY_THRESHOLD stable rounds` | DSL recovered and stayed stable. |
 
 ## "It should have failed over and didn't"
@@ -113,7 +114,11 @@ cat /var/lib/linux-dual-wan-failover/quota-snapshot.json
 stat -c '%y' /var/lib/linux-dual-wan-failover/quota-snapshot.json
 
 # If older than QUOTA_SNAPSHOT_MAX_STALE_SEC, the cap is ignored — that's
-# the safety mechanism, not a bug.
+# the safety mechanism, not a bug. An active hard block is NOT ignored.
+
+# Is the hard block active?
+sudo nft list table inet ldwf_quota_block
+journalctl -u quota-hard-block.service -n 20
 
 # Force a refresh.
 sudo systemctl start quota-provider-netgear-lm1200.service  # or your provider

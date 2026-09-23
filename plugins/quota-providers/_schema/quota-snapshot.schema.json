@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/fidpa/linux-dual-wan-failover/raw/main/plugins/quota-providers/_schema/quota-snapshot.schema.json",
   "title": "WAN Backup-Link Quota Snapshot",
-  "description": "Schema for the JSON file written by a quota provider plugin. Read by failover-monitor's _backup_quota_cap and _backup_quota_exhausted helpers.",
+  "description": "Schema for the JSON file written by a quota provider plugin. Read by failover-monitor's _backup_quota_cap helper and by quota-hard-block.sh.",
   "type": "object",
   "required": ["limit_pct", "collected_at"],
   "additionalProperties": true,
@@ -20,6 +20,11 @@
     "provider": {
       "description": "Free-text identifier of the quota provider. E.g. 'netgear-lm1200', 'huawei-e8372', 'isp-portal-screenscrape'.",
       "type": "string"
+    },
+    "billing_cycle_days_left": {
+      "description": "Optional. Days until the upstream billing cycle resets. Lets the quota hard block (QUOTA_HARD_BLOCK) recognise a new cycle even when the counter reads exactly 0 — the block itself drops the traffic that would otherwise move the counter. Omit it if the upstream API does not expose it.",
+      "type": "integer",
+      "minimum": 0
     }
   }
 }

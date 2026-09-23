@@ -39,6 +39,9 @@ def fixtures_dir(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(cfg, "WAN_QUALITY_PROM_FILE", prom_file)
     monkeypatch.setattr(cfg, "EVENTS_DB", events_db)
     monkeypatch.setattr(cfg, "MANUAL_ACTION_FILE", state_dir / "manual_action.json")
+    # Real path is a system state file; redirect so results never depend on
+    # whether the host running the tests happens to have an active block.
+    monkeypatch.setattr(cfg, "QUOTA_HARD_BLOCK_FILE", tmp_path / "quota-block.nft")
     # Without this the anti-flapping pre-check in app.py would read the real
     # production path — tests would depend on whether a failover timestamp
     # happens to exist on the machine. Absent by default → pre-check inert.

@@ -72,7 +72,7 @@ By default:
 | < 90 % | none | Backup competes normally. |
 | ≥ 90 % | 40 | DSL wins at normal scores. |
 | ≥ 96 % | 10 | DSL wins even at heavy degradation. |
-| ≥ 100 % | 0 | Backup blocked entirely. |
+| ≥ 100 % | 0 | Backup scores 0 — no score-based failover. The kernel can still route over it; see the hard block below. |
 
 Adjust in `failover.conf`:
 
@@ -85,7 +85,8 @@ QUOTA_CAP_TIER_100=0
 ## What if the snapshot becomes stale?
 
 Default policy: if the snapshot is older than `QUOTA_SNAPSHOT_MAX_STALE_SEC`
-(1 hour), the cap is **ignored**. This is graceful degradation: when the
+(1 hour), the cap is **ignored** (an active hard block is not — it stays
+until a fresh reading lifts it). This is graceful degradation: when the
 modem is unreachable or the collector is stuck, you'd rather fail over
 than be locked to a possibly-dead primary because of a stale quota number.
 
@@ -98,17 +99,71 @@ QUOTA_SNAPSHOT_MAX_STALE_SEC=3600  # default (1 h)
 Set to `0` to never ignore the cap (not recommended — you'll lose
 failover capability when the modem reboots).
 
-## Last-resort failover (override the cap)
+## Hard block: stop all backup traffic at the quota (opt-in)
 
-If you'd rather pay overage than be offline, set:
+The caps above only steer the orchestrator. The kernel still holds the
+backup default route, and when the primary loses carrier (unplugged cable,
+dead modem) it falls back to that route on its own — no failover decision
+involved. On a metered link that is exactly the traffic you wanted to
+avoid. The hard block closes that gap at packet level:
 
 ```bash
-LAST_RESORT_ENABLED=true
-LAST_RESORT_PRIMARY_THRESHOLD=25
+QUOTA_HARD_BLOCK=true
+QUOTA_HARD_BLOCK_PCT=99                     # integer 1-100
+QUOTA_HARD_BLOCK_ALLOW="192.168.0.0/24"     # still reachable via the backup (modem API)
 ```
 
-When the primary's score drops below 25 _and_ the quota cap would block
-failover, the orchestrator overrides the cap and fails over anyway,
-emitting a CRIT_FAILOVER alert so you can see it happened. Off by
-default — most operators prefer a known outage to a surprise overage
-charge.
+```bash
+sudo systemctl enable --now quota-hard-block.timer
+```
+
+Once the snapshot reports `QUOTA_HARD_BLOCK_PCT` or more,
+`quota-hard-block.sh` (run by the timer as root) loads an nftables table
+`inet ldwf_quota_block` that drops every packet leaving via `BACKUP_IFACE`,
+except to `QUOTA_HARD_BLOCK_ALLOW` and the DHCP broadcast. From then on:
+
+- `failover-monitor` refuses every switch to the backup (score-based,
+  carrier pre-check, instant event, manual force) and, if it is on the
+  backup, switches back to the primary at once.
+- `nmcli-failover-monitor` skips its emergency route switch.
+- The web UI shows a banner and answers `POST /api/force-failover` with
+  `409 quota_hard_block`.
+- If the primary dies, **you are offline** until the quota resets. That is
+  the point: no overage charges.
+
+**Surviving reboots and ruleset reloads.** The state is the file
+`/var/lib/linux-dual-wan-failover-quota-block/quota-block.nft`, a
+self-contained nftables script. Add this line to `/etc/nftables.conf` so
+the block is part of every ruleset load:
+
+```nft
+include "/var/lib/linux-dual-wan-failover-quota-block/*.nft"
+```
+
+The glob matches nothing while no block is active. Without the include,
+the timer re-applies the table within five minutes of a reload. Keep the
+include pointing at `/var/lib`, not at a checkout under `/home`: Debian's
+`nftables.service` runs with `ProtectHome=true`, and an include it cannot
+read makes the **whole** ruleset fail to load.
+
+**Lifting.** The block stays until a fresh snapshot (younger than
+`QUOTA_SNAPSHOT_MAX_STALE_SEC`) shows less than the threshold *and* looks
+like a new billing cycle: `limit_pct > 0`, or `billing_cycle_days_left` went
+up, or the provider does not report `billing_cycle_days_left` at all. A
+stale or missing snapshot never lifts it (fail-closed). If a new cycle
+starts but the counter still reads above the threshold, you get a warning.
+
+**Lifting by hand** (you accept the overage):
+
+```bash
+sudo systemctl stop quota-hard-block.timer     # otherwise the next run re-blocks
+sudo nft delete table inet ldwf_quota_block
+sudo rm -f /var/lib/linux-dual-wan-failover-quota-block/quota-block.nft
+```
+
+**Check the state:**
+
+```bash
+sudo nft list table inet ldwf_quota_block      # present = blocked, with drop counters
+journalctl -u quota-hard-block.service -n 20
+```

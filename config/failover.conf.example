@@ -163,21 +163,6 @@ STABILITY_RESET_THRESHOLD=50 # log-only: controls whether the window-reset warni
                              # window. Raise MIN_STABLE_DURATION instead.
 
 # ============================================================================
-# Last-resort failover (DANGEROUS — disabled by default)
-# ============================================================================
-# When the backup-link quota is exhausted (limit_pct >= 100%), `_backup_quota_cap`
-# clamps the backup score to 0 — preventing failover even when the primary is dead.
-# When LAST_RESORT_ENABLED=true, the orchestrator can override the cap and fail over
-# anyway, on the grounds that staying online matters more than the overage charge.
-#
-# Trade-off:
-#   false: zero surprise overage charges, but total outage if primary truly dies before quota resets
-#   true:  always-online, but you may pay overage to your ISP
-LAST_RESORT_ENABLED=false
-LAST_RESORT_PRIMARY_THRESHOLD=25
-LAST_RESORT_COOLDOWN=1800
-
-# ============================================================================
 # Latency / loss thresholds
 # ============================================================================
 
@@ -239,6 +224,25 @@ QUOTA_SNAPSHOT_MAX_STALE_SEC=3600
 QUOTA_CAP_TIER_90=40    # ≥90 % of monthly quota → cap to 40
 QUOTA_CAP_TIER_96=10    # ≥96 % → cap to 10
 QUOTA_CAP_TIER_100=0    # ≥100 % → cap to 0 (effectively blocks failover)
+
+# Hard block (opt-in). The score caps above only steer the orchestrator: the
+# kernel keeps the backup default route, and when the primary loses carrier it
+# routes over the backup anyway. With QUOTA_HARD_BLOCK=true, quota-hard-block.sh
+# (quota-hard-block.timer, root) installs an nftables table that drops every
+# packet leaving via BACKUP_IFACE once the snapshot reaches QUOTA_HARD_BLOCK_PCT
+# — no failover, no manual failover, even if the primary is dead. It lifts the
+# block on the first fresh reading of a new billing cycle.
+# Trade-off: zero overage charges, total outage if the primary dies before the
+# quota resets. See docs/how-to/configure-quota-tracking.md.
+QUOTA_HARD_BLOCK=false
+QUOTA_HARD_BLOCK_PCT=99
+# Destinations that stay reachable via BACKUP_IFACE while blocked (space-
+# separated IPv4 addresses/CIDRs) — typically the modem's own subnet, so the
+# quota provider can keep polling it. The DHCP broadcast is always allowed.
+QUOTA_HARD_BLOCK_ALLOW=""
+QUOTA_HARD_BLOCK_STATE_DIR=/var/lib/linux-dual-wan-failover-quota-block
+# Minimum seconds between two "failover blocked by quota hard block" alerts.
+QUOTA_BLOCK_NOTIFY_INTERVAL=3600
 
 # ============================================================================
 # Hardware sensors (optional)

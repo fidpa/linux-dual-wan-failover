@@ -78,6 +78,12 @@ otherwise         → no cap
 If the snapshot is older than `QUOTA_SNAPSHOT_MAX_STALE_SEC`, the cap is
 ignored.
 
+With the hard block enabled (`QUOTA_HARD_BLOCK=true`) the cap is 0 whenever
+the block's state file exists (regardless of snapshot age), and already at
+`limit_pct ≥ QUOTA_HARD_BLOCK_PCT` as a second floor. The block itself acts
+at packet level; see
+[configure-quota-tracking.md](../how-to/configure-quota-tracking.md#hard-block-stop-all-backup-traffic-at-the-quota-opt-in).
+
 ### Final clamp
 
 ```

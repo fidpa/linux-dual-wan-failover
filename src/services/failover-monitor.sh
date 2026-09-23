@@ -176,10 +176,11 @@ backup_degraded_streak=0            # Consecutive FRESH readings with backup DNS
 backup_degraded_last_mtime=0        # mtime of the last counted wan_quality.prom (prevents double counting)
 last_emergency_failback_mono=0      # Monotonic timestamp of last emergency failback
 
-# v4.10.0: Last-Resort failover state + config (Followup 25.04.2026 — Quota-blocked safety net)
-LAST_RESORT_PRIMARY_THRESHOLD="${LAST_RESORT_PRIMARY_THRESHOLD:-25}"
-LAST_RESORT_COOLDOWN="${LAST_RESORT_COOLDOWN:-1800}"
-last_last_resort_mono=0             # Monotonic timestamp of last Last-Resort trigger
+# Rate limit for the "failover blocked by quota hard block" notification
+QUOTA_BLOCK_NOTIFY_INTERVAL="${QUOTA_BLOCK_NOTIFY_INTERVAL:-3600}"
+last_quota_block_notify_mono=0
+# Carrier read path; tests point it at a fixture (CI runners have no WAN NICs)
+SYS_CLASS_NET="${SYS_CLASS_NET:-/sys/class/net}"
 
 # v4.7.0: Prolonged backup time alert thresholds
 PROLONGED_BACKUP_ALERT_TIME="${PROLONGED_BACKUP_ALERT_TIME:-7200}"  # 2 hours on backup = alert
@@ -549,47 +550,6 @@ is_emergency_failback_needed() {
     return 0
 }
 
-# Detect if Last-Resort failover is needed (returns 0=yes, 1=no)
-# v4.10.0 (25.04.2026): Quota-blocked safety net — primary catastrophic AND
-# backup score=0 because the LTE quota cap clamped it. Without this path the
-# system would stay on a dead primary instead of using throttled-but-routable
-# LTE. Triggers extra LTE-data charges → "critical" Mattermost alert.
-#
-# Preconditions (ALL):
-#   - current_wan == "primary"  (no flip-flop on backup)
-#   - eth0 score <= LAST_RESORT_PRIMARY_THRESHOLD (catastrophic primary)
-#   - lte0 score == 0  (capped, not just degraded)
-#   - _lte_quota_blocked  (cap=0 reason is *quota >=100%*, not real outage)
-#   - LAST_RESORT_COOLDOWN since last trigger
-#
-# Returns: 0 = yes, 1 = no.
-is_last_resort_failover_needed() {
-    local eth0_score="$1"
-    local lte0_score="$2"
-
-    # v4.10.1 (26.04.2026): Master switch — disabled by default after Incident
-    # 26.04.2026. When quota is exhausted, user prefers outage over extra cost.
-    [[ "${LAST_RESORT_ENABLED:-false}" == "true" ]] || return 1
-
-    [[ "$current_wan" == "primary" ]] || return 1
-    [[ $eth0_score -le $LAST_RESORT_PRIMARY_THRESHOLD ]] || return 1
-    [[ $lte0_score -eq 0 ]] || return 1
-
-    # The expensive check (Python subshell + JSON parse) only runs once the
-    # cheap score gates pass — keeps per-check overhead near zero.
-    _backup_quota_exhausted || return 1
-
-    local mono_now time_since_last
-    mono_now=$(get_monotonic_time)
-    time_since_last=$((mono_now - last_last_resort_mono))
-    if [[ $last_last_resort_mono -gt 0 ]] && [[ $time_since_last -lt $LAST_RESORT_COOLDOWN ]]; then
-        log_debug "Last-Resort failover blocked: ${time_since_last}s since last (need ${LAST_RESORT_COOLDOWN}s)"
-        return 1
-    fi
-
-    return 0
-}
-
 # Detect if failback is needed (returns 0=yes, 1=no)
 # v4.1.5: Enhanced with perfect score override and capped hysteresis
 is_failback_needed() {
@@ -908,6 +868,27 @@ perform_failover() {
     local to_interface="$2"
     local reason="${3:-score_based}"
 
+    # Quota hard block is absolute. nftables drops everything leaving via the
+    # backup anyway; switching the route there would be a guaranteed outage.
+    # return 0 like the anti-flapping path: not an error, no retry loop, and
+    # no caller changes state afterwards (that happens after safe_route_change).
+    if [[ "$to_interface" == "$BACKUP_IFACE" ]] && _backup_quota_blocked; then
+        log_warning "Failover to $BACKUP_IFACE blocked: quota hard block active (reason=$reason)"
+        local _mono
+        _mono=$(get_monotonic_time)
+        if [[ $last_quota_block_notify_mono -eq 0 ]] || \
+           [[ $((_mono - last_quota_block_notify_mono)) -ge $QUOTA_BLOCK_NOTIFY_INTERVAL ]]; then
+            send_notification \
+"FAILOVER BLOCKED — backup-link quota hard block active
+Trigger: $reason
+$PRIMARY_IFACE stays active even if it fails (QUOTA_HARD_BLOCK=true).
+Status: nft list table inet ldwf_quota_block" \
+                "warning" || true
+            last_quota_block_notify_mono=$_mono
+        fi
+        return 0
+    fi
+
     local current_time
     current_time=$(date +%s)
     local eth0_score
@@ -1085,20 +1066,38 @@ check_failover_conditions() {
     local lte0_score
     lte0_score=$(get_connection_score "$BACKUP_IFACE")
 
+    # On the backup while the quota hard block is active → back to the primary
+    # at once. nftables drops the backup traffic, so every minute there is a
+    # total outage; MIN_BACKUP_TIME and the stability windows protect nothing
+    # here. Without this path is_failback_needed() would hold for up to an
+    # hour, or indefinitely after a restart (backup start time unknown).
+    if [[ "$current_wan" == "backup" ]] && _backup_quota_blocked; then
+        local quota_primary_carrier
+        quota_primary_carrier=$(cat "${SYS_CLASS_NET}/${PRIMARY_IFACE}/carrier" 2>/dev/null || echo "0")
+        if [[ "$quota_primary_carrier" == "1" ]]; then
+            log_warning "QUOTA-BLOCK FAILBACK: backup blocked, $PRIMARY_IFACE carrier=1 (score=$eth0_score) — switching back now"
+            perform_failover "$BACKUP_IFACE" "$PRIMARY_IFACE" "quota_block_failback"
+        else
+            log_warning "Backup blocked by quota and $PRIMARY_IFACE has no carrier — no usable WAN path"
+        fi
+        return 0
+    fi
+
     # Carrier-aware pre-check (Layer-1 authority, bypasses score logic).
     # If primary has no carrier (cable unplugged, modem powered off) and the
     # backup is at least physically up with score > 0 (not quota-blocked),
     # force an unconditional failover. Score heuristics are irrelevant when
     # primary is dead at Layer 1 — and an exact-threshold backup score
     # (e.g. 25 from an end-to-end DNS penalty) would otherwise be classified
-    # as "backup not viable" by every score-based path. The score>0 guard
-    # preserves the LAST_RESORT quota-cap protection.
+    # as "backup not viable" by every score-based path. The quota hard block
+    # is checked explicitly: score>0 alone let the 96 % tier (cap 10) through.
     if [[ "$current_wan" == "primary" ]]; then
         local primary_carrier backup_carrier
-        primary_carrier=$(cat "/sys/class/net/${PRIMARY_IFACE}/carrier" 2>/dev/null || echo "1")
-        backup_carrier=$(cat "/sys/class/net/${BACKUP_IFACE}/carrier" 2>/dev/null || echo "0")
+        primary_carrier=$(cat "${SYS_CLASS_NET}/${PRIMARY_IFACE}/carrier" 2>/dev/null || echo "1")
+        backup_carrier=$(cat "${SYS_CLASS_NET}/${BACKUP_IFACE}/carrier" 2>/dev/null || echo "0")
 
-        if [[ "$primary_carrier" == "0" ]] && [[ "$backup_carrier" == "1" ]] && [[ $lte0_score -gt 0 ]]; then
+        if [[ "$primary_carrier" == "0" ]] && [[ "$backup_carrier" == "1" ]] && [[ $lte0_score -gt 0 ]] \
+            && ! _backup_quota_blocked; then
             log_warning "PRIMARY NO CARRIER: $PRIMARY_IFACE Layer-1 dead, $BACKUP_IFACE viable (carrier=1, score=$lte0_score) — forcing failover (bypass score logic)"
             send_notification \
 "FAILOVER (carrier pre-check) — primary Layer-1 down
@@ -1122,27 +1121,6 @@ Score logic bypassed (anti-stall)" \
             log_warning "CRITICAL PACKET LOSS on primary but backup not viable (lte0_score=$lte0_score)"
             # Continue to normal failover logic
         fi
-    fi
-
-    # v4.10.0: Last-Resort BEFORE both_degraded — when lte0=0 is purely from
-    # the quota cap (limit_pct >= 100%) and primary is catastrophic, the link
-    # is still routable. Without this check, both_degraded would fire and
-    # leave us offline with a dead primary plus a usable-but-capped backup.
-    # Mattermost alert is "critical" because the override incurs extra costs.
-    if is_last_resort_failover_needed "$eth0_score" "$lte0_score"; then
-        log_warning "LAST RESORT: primary catastrophic (eth0=$eth0_score), lte0 quota-capped to 0 — overriding cap"
-        send_notification \
-"LAST-RESORT FAILOVER — Quota-Cap überschrieben
-eth0=$eth0_score (catastrophic, ≤ ${LAST_RESORT_PRIMARY_THRESHOLD})
-lte0=$lte0_score (quota-capped, limit_pct >= 100%)
-DSL ist tot. LTE wird aktiviert trotz erschöpftem Volumen.
-Provider berechnet evtl. Zusatzkosten — alternativ wäre System komplett offline.
-Cooldown: ${LAST_RESORT_COOLDOWN}s." \
-            "critical" || true
-        if perform_failover "$PRIMARY_IFACE" "$BACKUP_IFACE" "last_resort"; then
-            last_last_resort_mono=$(get_monotonic_time)
-        fi
-        return 0
     fi
 
     # v4.1.7: Both interfaces critically degraded (≤25) - alert, don't failover

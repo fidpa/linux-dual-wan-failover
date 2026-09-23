@@ -22,6 +22,10 @@ from overage charges during a flaky-but-not-dead primary.
 │ - queries upstream API          │ JSON    │ - caps backup-iface score    │
 │ - writes quota-snapshot.json    │         │ - decision: route or not    │
 └─────────────────────────────────┘         └──────────────────────────────┘
+                 │ same file                 ┌──────────────────────────────┐
+                 └──────────────────────────▶│ quota-hard-block (opt-in)    │
+                                             │ - nftables drop on BACKUP_IF │
+                                             └──────────────────────────────┘
 ```
 
 The contract is **a file format**, not a function-call interface. This means
@@ -45,6 +49,7 @@ See [`_schema/quota-snapshot.schema.json`](_schema/quota-snapshot.schema.json).
 | `limit_pct` | number ≥ 0 OR `null` | yes | Percentage of monthly quota consumed. `null` = unknown / no quota configured upstream → no cap. |
 | `collected_at` | string (ISO-8601 UTC) | yes | Helps operators audit the snapshot's freshness. The orchestrator itself uses file `mtime`, not this field. |
 | `provider` | string | no | Free-text identifier. Useful for debugging when you switch between providers. |
+| `billing_cycle_days_left` | integer ≥ 0 | no | Days until the upstream counter resets. Used by the hard block to detect a new cycle; omit if the upstream API does not expose it. |
 
 ## Caps and tiers
 
@@ -54,7 +59,7 @@ capped. Defaults from `failover.conf.example`:
 ```bash
 QUOTA_CAP_TIER_90=40    # ≥ 90 % → cap to 40   (DSL wins at normal scores)
 QUOTA_CAP_TIER_96=10    # ≥ 96 % → cap to 10   (DSL wins even with heavy E2E penalty)
-QUOTA_CAP_TIER_100=0    # ≥ 100 % → cap to 0   (effectively blocks failover)
+QUOTA_CAP_TIER_100=0    # ≥ 100 % → cap to 0   (no score-based failover)
 ```
 
 If the snapshot file is older than `QUOTA_SNAPSHOT_MAX_STALE_SEC`
@@ -74,20 +79,15 @@ The provider's own systemd timer (e.g. `quota-provider-netgear-lm1200.timer`)
 must be enabled separately. See each provider's `README.md` for install
 instructions.
 
-## Last-resort failover
+## Hard block
 
-Even with `QUOTA_CAP_TIER_100=0` (which normally blocks failover), the
-orchestrator can be instructed to fail over anyway when the primary is
-catastrophically dead:
-
-```bash
-LAST_RESORT_ENABLED=true
-```
-
-This is **off by default**. Enabling it means: when your primary is dead
-AND your quota is exhausted, you choose "stay online and pay overage" over
-"go offline until quota resets". Only operators who would otherwise be
-woken up at 3 a.m. should enable this.
+The caps only steer the orchestrator. To stop backup traffic outright once
+the quota is used up — including the kernel's own fallback to the backup
+route — enable the opt-in hard block (`QUOTA_HARD_BLOCK=true`,
+`quota-hard-block.timer`). It reads the same snapshot. Providers that can
+report `billing_cycle_days_left` should do so: it lets the block recognise
+a new billing cycle even while the counter reads exactly 0. See
+[`docs/how-to/configure-quota-tracking.md`](../../docs/how-to/configure-quota-tracking.md#hard-block-stop-all-backup-traffic-at-the-quota-opt-in).
 
 ## Writing a custom provider
 

@@ -1,0 +1,37 @@
+[Unit]
+Description=linux-dual-wan-failover — backup-link quota hard block (nftables)
+Documentation=https://github.com/fidpa/linux-dual-wan-failover/blob/main/docs/how-to/configure-quota-tracking.md
+# Re-apply after the firewall loaded its ruleset (a reload without the
+# include line would otherwise drop the block until the next timer run).
+After=nftables.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Sets or lifts the nftables table inet ldwf_quota_block based on the quota
+# snapshot. A no-op (and lifts any leftover block) unless QUOTA_HARD_BLOCK=true
+# and a QUOTA_PROVIDER is configured.
+ExecStart=/usr/local/lib/linux-dual-wan-failover/services/quota-hard-block.sh
+
+StateDirectory=linux-dual-wan-failover-quota-block
+StateDirectoryMode=0755
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=quota-hard-block
+
+# Security hardening. nft needs CAP_NET_ADMIN, nothing else.
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+NoNewPrivileges=yes
+PrivateTmp=yes
+RestrictNamespaces=true
+LockPersonality=true
+ReadOnlyPaths=/etc/linux-dual-wan-failover
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+
+TimeoutStartSec=60

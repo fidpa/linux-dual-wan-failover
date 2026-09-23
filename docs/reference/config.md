@@ -21,10 +21,10 @@ high-level index.
 | Cooldowns | `ANTI_FLAPPING_DELAY`, `EMERGENCY_FAILBACK_COOLDOWN` | no (sane defaults) |
 | Emergency failback | `EMERGENCY_FAILBACK_MIN_BACKUP_TIME`, `EMERGENCY_FAILBACK_DEGRADED_CHECKS`, `EMERGENCY_FAILBACK_DNS_THRESHOLD_MS` | no — but read the note below before lowering any of them |
 | Failback gating | `MIN_FAILBACK_SCORE`, `MIN_BACKUP_TIME`, `MIN_STABLE_DURATION`, `STABILITY_RESET_THRESHOLD` | no (sane defaults) |
-| Last-resort | `LAST_RESORT_ENABLED`, `LAST_RESORT_PRIMARY_THRESHOLD`, `LAST_RESORT_COOLDOWN` | no (disabled by default) |
 | Latency / loss | `DSL_LATENCY_*`, `LTE_LATENCY_*`, `PACKET_LOSS_*` | no (sane defaults) |
 | Alerting plugin | `ALERTING_BACKEND`, `ALERTING_PLUGIN_DIR`, `ALERTING_PLUGIN_PATH` | no (default: `none`) |
 | Quota plugin | `QUOTA_PROVIDER`, `QUOTA_SNAPSHOT_PATH`, `QUOTA_SNAPSHOT_MAX_STALE_SEC`, `QUOTA_CAP_TIER_*` | no (default: `none`) |
+| Quota hard block | `QUOTA_HARD_BLOCK`, `QUOTA_HARD_BLOCK_PCT`, `QUOTA_HARD_BLOCK_ALLOW`, `QUOTA_HARD_BLOCK_STATE_DIR`, `QUOTA_BLOCK_NOTIFY_INTERVAL` | no (default: off; needs a quota provider; "failover blocked" alert at most every 3600 s) |
 | Hardware | `HARDWARE_TEMP_BACKEND` | no (default: `none`) |
 | Directories | `LOG_DIR`, `STATE_DIR`, `RUNTIME_DIR` | no (systemd units set them) |
 | Toolkit | `TOOLKIT_LIB` | no (auto-detected) |

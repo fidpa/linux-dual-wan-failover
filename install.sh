@@ -254,6 +254,17 @@ EOF
 
     cat <<EOF
 
+  5. Optional quota hard block (needs a QUOTA_PROVIDER):
+       set QUOTA_HARD_BLOCK=true in ${ETC_DIR}/failover.conf, then
+       sudo systemctl enable --now quota-hard-block.timer
+     To keep the block across reboots and ruleset reloads, add to
+     /etc/nftables.conf:
+       include "/var/lib/linux-dual-wan-failover-quota-block/*.nft"
+     Documentation: docs/how-to/configure-quota-tracking.md.
+EOF
+
+    cat <<EOF
+
 Quickstart guide: docs/tutorial/01-quickstart.md
 ==================================================================
 EOF

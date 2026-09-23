@@ -48,6 +48,7 @@ class FailoverSnapshot:
     state_age_seconds: int
     prom_age_seconds: int
     thresholds: dict[str, int] = field(default_factory=dict)
+    quota_hard_block: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +145,14 @@ def parse_wan_quality_prom(text: str) -> dict[str, dict[str, float]]:
 # ---------------------------------------------------------------------------
 
 
+def quota_hard_block_active() -> bool:
+    """True while the backup-link quota hard block (nftables) is active."""
+    try:
+        return config.QUOTA_HARD_BLOCK_FILE.is_file()
+    except OSError:
+        return False
+
+
 def _empty_snapshot(state_age: int, prom_age: int) -> FailoverSnapshot:
     primary = config.PRIMARY_IFACE
     backup = config.BACKUP_IFACE
@@ -161,6 +170,7 @@ def _empty_snapshot(state_age: int, prom_age: int) -> FailoverSnapshot:
         state_age_seconds=state_age,
         prom_age_seconds=prom_age,
         thresholds={},
+        quota_hard_block=quota_hard_block_active(),
     )
 
 
@@ -234,6 +244,7 @@ def read_snapshot() -> FailoverSnapshot:
         thresholds={
             k: i for k, v in thresholds.items() if (i := _as_int(v)) is not None
         },
+        quota_hard_block=quota_hard_block_active(),
     )
 
 
@@ -248,6 +259,7 @@ def snapshot_to_dict(snap: FailoverSnapshot) -> dict[str, Any]:
         "state_age_seconds": snap.state_age_seconds,
         "prom_age_seconds": snap.prom_age_seconds,
         "thresholds": snap.thresholds,
+        "quota_hard_block": snap.quota_hard_block,
         "interfaces": {
             iface: {
                 "interface": m.interface,

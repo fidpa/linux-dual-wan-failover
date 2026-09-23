@@ -40,6 +40,7 @@ Returns the current snapshot as JSON.
   "state_age_seconds": 2,
   "prom_age_seconds": 3,
   "thresholds": {"failure": 5, "recovery": 20},
+  "quota_hard_block": false,
   "interfaces": {
     "eth0": {
       "interface": "eth0",
@@ -195,7 +196,9 @@ Alert: `WARN_FAILOVER`.
 ### `POST /api/force-failover`
 
 Mirror of `/api/failback` for the opposite direction. 409 unless current
-WAN is primary.
+WAN is primary. Also 409 with `"status": "quota_hard_block"` while the
+backup-link quota hard block is active — nothing is submitted, because the
+daemon would refuse the switch and nftables would drop the traffic.
 
 Rate-limit: 1 / 120 s.
 Audit event: `force_failover_submitted` etc.
@@ -320,7 +323,7 @@ env to `0` only in tests / dev.
 | 207 | Partial success (mutation persisted, side-effect failed). |
 | 400 | Empty/malformed body. |
 | 403 | CSRF / Origin / Referer rejected. |
-| 409 | State precondition not met (failback while on primary, or anti-flapping cooldown still running — `status` distinguishes `noop` from `cooldown`). |
+| 409 | State precondition not met (failback while on primary, anti-flapping cooldown still running, or force-failover under an active quota hard block — `status` distinguishes `noop`, `cooldown` and `quota_hard_block`). |
 | 422 | Validation failed (range, type, unknown field). |
 | 429 | Rate-limit or SSE per-IP cap hit. |
 | 500 | Internal error during write/install. |

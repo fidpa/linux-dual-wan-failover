@@ -5,6 +5,79 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-23: The quota that a score cap never enforced
+
+A score cap is not a quota limit. With the backup link at 96-99 % of its
+quota, the carrier pre-check still failed over, because it only asked for
+`score > 0` and the 96 % tier caps to 10. And no cap ever stops the kernel:
+it keeps the backup default route, and when the primary loses carrier it
+routes over the backup without any failover decision. This release enforces
+the quota where the traffic actually flows.
+
+### Added
+
+- **Quota hard block (opt-in, `QUOTA_HARD_BLOCK=true`).** New
+  `src/services/quota-hard-block.sh`, run as root by `quota-hard-block.timer`.
+  Once the quota snapshot reaches `QUOTA_HARD_BLOCK_PCT` (default 99), it
+  loads the nftables table `inet ldwf_quota_block`, which drops every packet
+  leaving via `BACKUP_IFACE` except to `QUOTA_HARD_BLOCK_ALLOW` and the DHCP
+  broadcast. The state is a self-contained nftables script under
+  `/var/lib/linux-dual-wan-failover-quota-block/`; an `include` of that
+  directory in `/etc/nftables.conf` keeps the block across reboots and
+  reloads. Lifting requires a fresh snapshot below the threshold that looks
+  like a new billing cycle; stale or missing snapshots never lift it.
+- **All paths honour the block.** `failover-monitor` refuses every switch to
+  the backup (gate in `perform_failover`, covering score-based, carrier
+  pre-check, instant-event and manual-force paths) and switches back at once
+  if it is on the backup (`quota_block_failback`, bypassing
+  `MIN_BACKUP_TIME`). `nmcli-failover-monitor` skips its emergency route
+  switch. The web UI shows a banner, reports `quota_hard_block` in
+  `/api/state` and answers `POST /api/force-failover` with
+  `409 quota_hard_block`. The "failover blocked" alert repeats at most every
+  `QUOTA_BLOCK_NOTIFY_INTERVAL` seconds (default 3600).
+- **`billing_cycle_days_left` in the quota snapshot** (optional schema field,
+  written by the `netgear-lm1200` provider). The block drops the keepalive
+  traffic that would otherwise lift the counter above 0 after a reset; a
+  rising days-left value is how it still recognises the new cycle.
+
+### Changed
+
+- **The carrier pre-check checks the hard block** in addition to
+  `score > 0`, which alone let the 96 % tier through.
+- **`_backup_quota_cap` returns 0 while the block is active**, regardless of
+  snapshot age, and already at `QUOTA_HARD_BLOCK_PCT` when the block is
+  enabled (second floor if the enforcer fails).
+- `failover-monitor` reads carrier state from `SYS_CLASS_NET`
+  (default `/sys/class/net`), so the carrier paths are testable.
+
+### Fixed
+
+- **Without the logging toolkit, 27 log calls were "command not found".**
+  The in-tree fallback logger in `common.sh` defined only `log_info`,
+  `log_warning`, `log_error` and `log_debug`, while the services also call
+  `log_notice`, `log_critical` and the `log_*_structured` variants, among
+  them the "Failover completed" and route-change lines. Each such call
+  returned 127 and the line was lost. The fallback now defines all of them
+  (structured fields are appended to the message) and fills in single
+  functions a partial toolkit may lack.
+
+### Removed
+
+- **Last-resort failover** (`LAST_RESORT_ENABLED`,
+  `LAST_RESORT_PRIMARY_THRESHOLD`, `LAST_RESORT_COOLDOWN`,
+  `is_last_resort_failover_needed`, `_backup_quota_exhausted`). It traded a
+  known outage for an overage bill; nobody wants the bill.
+
+### Upgrade notes
+
+- If your `failover.conf` sets `LAST_RESORT_ENABLED=true`, that setting is
+  now ignored: with an exhausted quota the backup stays unused.
+  Remove the three `LAST_RESORT_*` lines.
+- The hard block is off by default. To use it: set `QUOTA_HARD_BLOCK=true`
+  and `QUOTA_HARD_BLOCK_ALLOW` (your modem's LAN, e.g. `192.168.0.0/24` for an
+  LM1200), enable `quota-hard-block.timer`, and add the include line to
+  `/etc/nftables.conf` (see `docs/how-to/configure-quota-tracking.md`).
+
 ## [0.9.8] - 2026-08-29: The failback nobody waited long enough for
 
 `safe-failover-testing.md` had not been touched since v0.3.0 while
@@ -1244,7 +1317,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.8...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.8...v0.10.0
 [0.9.8]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.5...v0.9.6

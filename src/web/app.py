@@ -342,6 +342,19 @@ def create_app() -> Flask:
         if snap.freshness == "missing":
             audit_log.emit("force_failover_rejected", result="rejected", payload={"reason": "state_missing"})
             return jsonify({"error": "state_missing"}), 503
+        if state_reader.quota_hard_block_active():
+            audit_log.emit(
+                "force_failover_rejected", result="rejected", payload={"reason": "quota_hard_block"}
+            )
+            return jsonify(
+                {
+                    "status": "quota_hard_block",
+                    "detail": (
+                        "Backup-link quota hard block active: nftables drops all traffic via "
+                        "the backup interface, a failover would cut the connection."
+                    ),
+                }
+            ), 409
         if snap.current_wan != "primary":
             audit_log.emit(
                 "force_failover_noop",

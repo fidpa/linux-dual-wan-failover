@@ -175,15 +175,32 @@ def extract_limit_pct(model: dict[str, Any]) -> float | None:
     return round(100.0 * float(transferred) / float(limit), 2)
 
 
+def extract_days_left(model: dict[str, Any]) -> int | None:
+    """Days until the billing cycle resets, or None if the firmware omits it."""
+    wwan = model.get("wwan", {}) or {}
+    data_usage = wwan.get("dataUsage", {}) or {}
+    generic = data_usage.get("generic", {}) or {}
+    days = generic.get("billingCycleRemainder")
+    if isinstance(days, bool) or not isinstance(days, (int, float)) or days < 0:
+        return None
+    return int(days)
+
+
 # ---- Snapshot writing -------------------------------------------------------
 
 
-def write_snapshot(path: Path, limit_pct: float | None) -> None:
-    snapshot = {
+def build_snapshot(limit_pct: float | None, days_left: int | None) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {
         "limit_pct": limit_pct,
         "collected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "provider": "netgear-lm1200",
     }
+    if days_left is not None:
+        snapshot["billing_cycle_days_left"] = days_left
+    return snapshot
+
+
+def write_snapshot(path: Path, snapshot: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
@@ -225,20 +242,17 @@ def main() -> int:
         client.login()
         model = client.fetch_model()
         pct = extract_limit_pct(model)
+        days_left = extract_days_left(model)
     except Exception as exc:
         logger.error("Modem query failed: %s", exc)
         return 1
 
+    snapshot = build_snapshot(pct, days_left)
     if args.dry_run:
-        snapshot = {
-            "limit_pct": pct,
-            "collected_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "provider": "netgear-lm1200",
-        }
         print(json.dumps(snapshot, indent=2))
         return 0
 
-    write_snapshot(Path(args.snapshot_path), pct)
+    write_snapshot(Path(args.snapshot_path), snapshot)
     logger.info("Snapshot written: limit_pct=%s path=%s", pct, args.snapshot_path)
     return 0
 

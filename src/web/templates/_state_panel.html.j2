@@ -21,6 +21,16 @@
     </div>
     {% endif %}
 
+    {# === Backup-link quota hard block (nftables, quota-hard-block.sh) === #}
+    {% if snap.quota_hard_block %}
+    <div class="banner banner-warn" role="status">
+        <strong>🔒 Backup link blocked.</strong> The data quota is used up and nftables drops all
+        traffic via {{ iface_labels.get(snap.backup_interface, snap.backup_interface) }}.
+        Failover stays blocked until the next billing cycle.
+        Status: <code>nft list table inet ldwf_quota_block</code>
+    </div>
+    {% endif %}
+
     {# === Interface cards === #}
     <div class="iface-grid">
         {% for iface, m in snap.interfaces.items() %}

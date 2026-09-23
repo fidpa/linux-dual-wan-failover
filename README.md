@@ -50,7 +50,7 @@ can be tuned.
 | Cost | free | pfSense CE free, UniFi is hardware | free | free |
 | Quota-aware | yes (plugin) | no | no | no |
 | Anti-flap and hysteresis | yes | yes | yes | usually broken |
-| Last-resort failover | yes (opt-in) | no | no | no |
+| Hard quota block (nftables) | yes (opt-in) | no | no | no |
 | Source you can read | Bash + Python, MIT | pfSense CE Apache-2.0, UniFi closed | shell, GPL, OpenWrt-tied | yours |
 
 ## Use Cases
@@ -395,7 +395,10 @@ A quota provider runs as its own systemd timer, queries your modem (or your
 ISP's customer portal, or anything else), and writes a JSON snapshot. The
 failover scoring logic reads the snapshot and caps the backup-link score
 when you're approaching your monthly quota, so you don't pay overage fees
-for a flaky-but-not-dead primary.
+for a flaky-but-not-dead primary. The opt-in hard block goes further: once
+the quota is used up, nftables drops all traffic via the backup — including
+the kernel's own fallback when the primary loses carrier.
+
 
 See [`plugins/quota-providers/README.md`](plugins/quota-providers/README.md)
 for the schema and how to write your own.

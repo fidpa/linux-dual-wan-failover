@@ -61,6 +61,24 @@ def test_force_failover_succeeds_when_on_primary(client, fresh_state, monkeypatc
     assert sent and sent[0][0] == "CRIT_FAILOVER"
 
 
+def test_force_failover_rejected_while_quota_hard_block_active(client, fresh_state, monkeypatch):
+    """No manual_action.json may be written while the quota hard block is active."""
+    sent = _patch_alerts(monkeypatch)
+    (fresh_state / "quota-block.nft").write_text("table inet ldwf_quota_block {}\n")
+    resp = _csrf_post(client, "/api/force-failover")
+    assert resp.status_code == 409
+    assert resp.get_json()["status"] == "quota_hard_block"
+    assert not (fresh_state / "wan-state" / "manual_action.json").exists()
+    assert not sent
+
+
+def test_state_reports_quota_hard_block(client, fresh_state):
+    assert client.get("/api/state").get_json()["quota_hard_block"] is False
+    (fresh_state / "quota-block.nft").write_text("table inet ldwf_quota_block {}\n")
+    assert client.get("/api/state").get_json()["quota_hard_block"] is True
+    assert "Backup link blocked" in client.get("/api/state-html").get_data(as_text=True)
+
+
 def test_force_failover_csrf_required(client, fresh_state, monkeypatch):
     """No-CSRF callers (curl without cookie+header) must still hit 403."""
     _patch_alerts(monkeypatch)

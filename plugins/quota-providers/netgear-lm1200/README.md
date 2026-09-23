@@ -81,11 +81,21 @@ QUOTA_CAP_TIER_96=10    # ≥ 96 % → cap to 10
 QUOTA_CAP_TIER_100=0    # ≥ 100 % → cap to 0
 ```
 
+The snapshot also carries `billing_cycle_days_left` (from the firmware's
+`billingCycleRemainder`), so the opt-in hard block can tell a new billing
+cycle from a counter glitch. With the block enabled, keep the modem's LAN
+reachable through it — `QUOTA_HARD_BLOCK_ALLOW="192.168.0.0/24"` for the
+factory default — or this collector can no longer poll the modem.
+
 ## Caveats
 
 - **Modem reboots reset the counter.** The LM1200's billing-cycle counter
   is firmware-tracked, not ISP-tracked. If you reboot the modem mid-billing-cycle,
   it loses count. For ISPs where this matters, prefer a portal-scrape provider.
+  With the hard block active, a reset to exactly 0 keeps the block (no
+  rising `billing_cycle_days_left`), but as soon as the reset counter shows
+  any traffic the block lifts — the snapshot cannot tell that apart from a
+  genuine new cycle. Avoid modem reboots while the quota is exhausted.
 - **No quota configured = `null`.** If your APN doesn't have a data-limit
   field set, `limit_pct` is `null` (correctly: "unknown"), no cap is applied.
 - **Auth tokens expire.** The collector logs in fresh on every run, so the
