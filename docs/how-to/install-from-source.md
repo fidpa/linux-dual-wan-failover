@@ -9,8 +9,8 @@ exactly what gets placed where, or who need to install on a distro the script do
 - Linux (any distro with `systemd` ≥ 245 and `iproute2`).
 - Bash 4.0+.
 - NetworkManager (`nmcli`) for the event-driven monitor. Failover-monitor
-  also works in polling-only mode without NM, but reaction time goes from
-  ~5 s to ~15 s.
+  also works in polling-only mode without NM; a link that drops is then
+  caught by the scoring loop instead of the link-down event.
 - Python 3.10+ for the metrics collector and the LM1200 quota provider.
 - Root (for installing systemd units, writing to `/usr/local/lib`,
   manipulating `ip route`).

@@ -8,13 +8,14 @@
 ![Release](https://img.shields.io/github/v/tag/fidpa/linux-dual-wan-failover?label=release&sort=semver)
 ![Status: Beta](https://img.shields.io/badge/Status-Beta-yellow.svg)
 
-**Sub-10s WAN failover for Linux dual-WAN routers, driven by NetworkManager events.**
+**Dual-WAN failover for Linux routers, measured in production: median time to the backup under a minute.**
 
-> Detect a dead primary uplink within a five-second confirmation window, switch
-> to the backup without dropping established connections, clean up the stale
-> routes NetworkManager leaves behind, and recover automatically when the
-> primary comes back. All in pure Bash plus a Python metrics collector, on a
-> Linux box with `systemd` and `iproute2`.
+> Detect a dead primary uplink with a scoring loop, plus a NetworkManager
+> event watcher for the case where the link itself goes down. Switch the
+> default route to the backup, clean up the stale routes NetworkManager leaves
+> behind, and recover automatically when the primary comes back. All in pure
+> Bash plus a Python metrics collector, on a Linux box with `systemd` and
+> `iproute2`.
 
 ## Why this exists
 
@@ -38,14 +39,14 @@ primary, LTE backup) since August 2025 and writing down every pitfall.
 
 ## Comparison
 
-The numbers below describe each project's *default* configuration, taken from
-its own documentation. Only the first column is measured here (see
-[Real-World Results](#real-world-results)); the others are not, and all of them
-can be tuned.
+Only the first column is measured here (see
+[Real-World Results](#real-world-results)). The other columns are not; they
+describe each project's *default* configuration as stated in its own
+documentation, and all of them can be tuned.
 
 | | linux-dual-wan-failover | pfSense / UniFi | mwan3 (OpenWrt) | DIY shell script |
 |---|---|---|---|---|
-| Failover time | 4 to 6 s (event-driven) | 30 to 60 s (polling) | 5 to 15 s | depends |
+| Failover time | under 1 min (median, measured) | 30 to 60 s (polling) | 5 to 15 s | depends |
 | Linux distro | systemd + NetworkManager | ships its own OS | OpenWrt only | any |
 | Cost | free | pfSense CE free, UniFi is hardware | free | free |
 | Quota-aware | yes (plugin) | no | no | no |
@@ -154,10 +155,17 @@ single-deployment numbers, not a benchmark across hardware.
 
 | Metric | Value |
 |--------|-------|
-| Production runtime | 12 months (August 2025 to August 2026) |
-| Failover events recorded | 447 (event DB, August 2025 through April 2026) |
-| Typical failover latency (event path) | 4 to 6 s |
-| Typical failover latency (polling fallback) | 60 to 90 s |
+| Production runtime | since August 2025 |
+| Switches to the backup | at least 347 (August 2025 to September 2026) |
+| Outage to traffic over the backup | median under 1 min, longest 90 s (43 outages since May 2026) |
+| Route change itself | under 1 s |
+
+Almost all of that time is detection. The DSL modem here keeps its Ethernet
+link up when the line behind it fails, so there is no link-down event; the
+scoring loop has to notice the outage itself, which usually takes two to four
+check rounds. 42 of the 43 outages were detected that way. The outage time
+is taken from the monitor log, from the last healthy check to the verified
+backup route, over two log periods (May to June and September 2026).
 
 Failbacks fail noticeably more often than failovers on this deployment, which
 is why `route-guardian` carries an `emergency_restore_any_route` path at all.

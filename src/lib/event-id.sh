@@ -36,8 +36,9 @@
 FAILOVER_EVENT_ID="${FAILOVER_EVENT_ID:-}"
 
 # Max age (seconds) of a pending_failover_id before it is treated as orphaned
-# and ignored (nmcli detection -> failover-monitor processing is sub-second in
-# practice; a generous window covers USR1 re-checks).
+# and ignored (failover-monitor picks the signal up only at the start of its
+# next loop iteration, so detection to route change took up to about 25 s in
+# production; the window covers that plus USR1 re-checks).
 #
 # IMPORTANT — must stay < ANTI_FLAPPING_DELAY_INSTANT (60s in failover.conf):
 # when an instant_event is suppressed by anti-flapping (return 0 BEFORE

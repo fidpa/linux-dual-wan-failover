@@ -8,10 +8,12 @@ package as ``web.<module>`` — we extend ``sys.path`` to include
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import sys
 import time
 from datetime import datetime, timedelta
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,25 @@ import pytest
 # tests/ → web/ → src/  (the parent of `src` becomes the repo root)
 SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SRC))
+
+# Floors from requirements.txt. A distro python3-flask (Debian 12 ships 2.2)
+# imports fine and then fails 27 tests on the test-client cookie API, which
+# reads like a regression instead of the wrong interpreter.
+_MIN_VERSIONS = {"flask": (3, 1), "werkzeug": (3, 1)}
+
+
+def pytest_configure(config):
+    for dist, floor in _MIN_VERSIONS.items():
+        try:
+            found = version(dist)
+        except PackageNotFoundError:
+            continue  # the import in the tests fails with a clear message
+        if tuple(int(p) for p in re.findall(r"\d+", found)[:2]) < floor:
+            raise pytest.UsageError(
+                f"{dist} {found} is installed, src/web/requirements.txt needs "
+                f">={'.'.join(map(str, floor))}. Run the suite from a venv: "
+                "python3 -m venv .venv && .venv/bin/pip install -r src/web/requirements.txt"
+            )
 
 
 @pytest.fixture()

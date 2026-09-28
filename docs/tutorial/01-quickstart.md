@@ -13,14 +13,15 @@
 └──────────┘                                      │         │
                                                   │         │  failover
 ┌──────────┐                                      │         │
-│ Internet │  ◀──── backup uplink ──── lte0 ─── │         │  in <5 s
+│ Internet │  ◀──── backup uplink ──── lte0 ─── │         │  in <1 min
 │ (LTE)    │                                      └─────────┘
 └──────────┘
 ```
 
 When the DSL link goes degraded or dies, the box switches the default route
-to LTE within ~5 seconds. When DSL recovers and stays stable for 5 minutes,
-it switches back.
+to LTE, typically in under a minute. When DSL recovers and stays stable for
+15 minutes, it switches back, but normally no earlier than an hour after the
+failover.
 
 ## 1. Clone and inspect
 

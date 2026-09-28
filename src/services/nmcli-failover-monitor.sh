@@ -5,7 +5,8 @@
 #
 # Watches NetworkManager state via `nmcli monitor` and signals the
 # failover-monitor orchestrator (SIGUSR1) when the primary uplink goes
-# down. Sub-second reaction compared to the polling-based monitor alone.
+# down, so a link loss does not have to wait for the scoring loop's
+# failure counter.
 #
 # Configured via /etc/linux-dual-wan-failover/failover.conf.
 #

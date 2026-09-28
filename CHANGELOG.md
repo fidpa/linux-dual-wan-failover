@@ -5,6 +5,92 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-09-28: Failover time as measured in production, not as designed
+
+The README promised "Sub-10s WAN failover" and a typical failover latency of
+4 to 6 s. Neither number was ever measured. 4 to 6 s is the design of the
+link-down path (the link drops and `nmcli-failover-monitor` confirms it within
+its five-second window), and the 60 to 90 s quoted for polling is five failed
+checks times 15 s, computed. Measured on the production deployment, from the
+last healthy check to a verified route over the backup, the median is under a
+minute and the longest outage took 90 s (43 outages since May 2026, taken from
+the monitor log). The time goes into detection. The DSL modem there keeps its
+Ethernet link up when the line behind it fails, so there is no link-down event
+and the scoring loop has to notice the outage itself; 42 of the 43 outages were
+detected that way.
+
+Documentation, comments and tests only. No code path, configuration or on-disk
+format changed.
+
+#### Documentation corrected against production measurements
+
+- **The headline and the comparison table no longer claim a failover time
+  nobody measured.** "Sub-10s WAN failover" in the README headline,
+  "4 to 6 s (event-driven)" in the comparison table, and the two "Typical
+  failover latency" rows under Real-World Results (4 to 6 s event path, 60 to
+  90 s polling) are replaced by the measured value: median under 1 min, longest
+  90 s, 43 outages since May 2026. The end of an outage is the log line
+  "Route change successful and verified", which `verify_route_change` writes
+  only once `ip route get` points at the backup and a ping bound to the backup
+  reaches the internet. The route change itself stays listed on its own, at
+  under 1 s. "Under a minute" holds for the median, not for every outage. The
+  v0.9.7 section below calls the 4 to 6 s "measured"; that was wrong, and it is
+  corrected here rather than in that section.
+
+- **The README no longer says established connections survive the switch.**
+  The daemon changes the route metric only and has no conntrack handling, and
+  the public address changes with the route. `docs/explanation/why-event-driven.md`
+  said a TCP connection with data in flight "will likely survive"; it now says
+  established connections do not carry over.
+
+- **The event count now counts switches to the backup.** "447 failover events"
+  counted failovers and failbacks separately. The README now lists at least 347
+  switches to the backup between August 2025 and September 2026, taken from the
+  event DB. "At least", because the metrics collector missed at least two
+  switches in February 2026.
+
+- **The link-down path is described the way it runs.** `why-event-driven.md`
+  presented "Total: ~5 seconds" as a result; it is the design. `failover-monitor`
+  picks up the SIGUSR1 flag only at the start of its next loop iteration and
+  re-scores both interfaces before it switches, so a signal that arrives during
+  a check round waits for that round to finish. `architecture-overview.md`
+  ("Sub-second on event", "sub-5-second reaction"), the gate table in
+  `safe-failover-testing.md`, `install-from-source.md` ("~5 s to ~15 s" without
+  NetworkManager) and the header comments of `nmcli-failover-monitor.sh`,
+  `failover-monitor.sh` and `src/lib/event-id.sh` now describe that sequence
+  instead of a sub-second or five-second figure. The `event-id.sh` comment
+  justified the 45 s `FAILOVER_EVENT_ID_PENDING_MAX_AGE` with "sub-second"
+  processing; the window still covers the up to about 25 s measured from signal
+  to route change.
+
+- **The quickstart promised a failback after five minutes of stable DSL.**
+  Failback is gated by `MIN_STABLE_DURATION` (900 s) and `MIN_BACKUP_TIME`
+  (3600 s), so on the normal path the box stays on the backup for at least an
+  hour. The tutorial now says so, and its diagram and first paragraph drop the
+  "in <5 s" and "within ~5 seconds".
+
+### Changed (tests)
+
+- **A quota-provider test that CI skipped on every run now runs.**
+  `custom-template: produces a valid snapshot` in
+  `tests/unit/test_quota_schema.bats` required the template to be executable,
+  but `plugins/quota-providers/custom-template/collect-quota.sh` ships as 0644
+  on purpose, since users copy it before scheduling it. The test now runs the
+  template through `bash`, parses the snapshot as JSON instead of grepping for
+  field names, and checks that no temp file is left beside it.
+
+- **The web-UI integration tests read the CSRF cookie through the public
+  test-client API.** Four helpers in `src/web/tests/integration/` read
+  `client._cookies`, a private Werkzeug attribute; they now call
+  `client.get_cookie()`.
+
+- **pytest against a too-old Flask stops with one clear message.** With a
+  distro Flask below the `requirements.txt` floor (Debian 12 ships 2.2), 27
+  tests failed on the test-client cookie API and read like regressions.
+  `src/web/tests/conftest.py` now checks Flask and Werkzeug against 3.1 and
+  exits with a usage error that names the installed version and the venv
+  command.
+
 ## [0.10.0] - 2026-09-23: The quota that a score cap never enforced
 
 A score cap is not a quota limit. With the backup link at 96-99 % of its
@@ -1317,7 +1403,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.8...v0.10.0
 [0.9.8]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.7...v0.9.8
 [0.9.7]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.6...v0.9.7

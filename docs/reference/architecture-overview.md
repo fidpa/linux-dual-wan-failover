@@ -8,7 +8,7 @@ There is a reason it isn't one.
 | Service | Role | Frequency |
 |---------|------|-----------|
 | `failover-monitor` | Orchestrator: scoring, decision, route switch | Every CHECK_INTERVAL (15 s default) |
-| `nmcli-failover-monitor` | Event detection: signals orchestrator on NM state changes | Sub-second on event |
+| `nmcli-failover-monitor` | Event detection: signals orchestrator on NM state changes | On NM event, after a link-down confirmation of up to 5 s |
 | `route-guardian` | Route enforcement: cleans duplicates, ensures correct metrics | Every ROUTE_GUARDIAN_CHECK_INTERVAL (10 s default) |
 | `failover-metrics-collector` | Observability: Prometheus textfile + SQLite event log | Every 5 s |
 
@@ -90,8 +90,8 @@ for the full argument. Short version:
 - **Single polling service** = reliable but slow (15-30 s reaction).
 - **Single event service** = fast but brittle (NM doesn't always emit
   the events you'd expect — link bouncing, dhcp races, suspended state).
-- **Both** = sub-5-second reaction in the common case, polling fallback
-  for the cases the events don't cover.
+- **Both** = a faster reaction when the link itself drops, polling for
+  the cases the events don't cover.
 
 ## Why a separate route-guardian?
 

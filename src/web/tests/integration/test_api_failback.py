@@ -56,9 +56,7 @@ def _csrf_post(client, path: str, headers: dict | None = None):
     client.get("/api/state")  # ensures cookie is set on the test client jar
     # Read the cookie back from the test-client jar (works regardless of whether
     # the second/third GET re-issued Set-Cookie or not).
-    cookie_obj = next(
-        (c for c in client._cookies.values() if c.key == CSRF_COOKIE_NAME), None
-    )
+    cookie_obj = client.get_cookie(CSRF_COOKIE_NAME)
     assert cookie_obj is not None, "CSRF cookie was not issued"
     token = cookie_obj.value
     base_headers = {

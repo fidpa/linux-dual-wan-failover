@@ -24,7 +24,7 @@ With the defaults from `config/failover.conf.example`:
 
 | Direction | Gate | Default | Time |
 |---|---|---|---|
-| Failover (event path) | link-down confirmation | 5 s timeout, 500 ms poll | 4 to 6 s |
+| Failover (event path) | link-down confirmation | 5 s timeout, 500 ms poll | up to 5 s plus one scoring round |
 | Failover (score path) | `FAILURE_THRESHOLD` x `CHECK_INTERVAL` | 5 x 15 s | about 75 s |
 | Failback | `RECOVERY_THRESHOLD` x `CHECK_INTERVAL` | 20 x 15 s | about 5 min |
 | Failback | `MIN_BACKUP_TIME` | 3600 s | **1 h on the backup** |

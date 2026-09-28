@@ -10,7 +10,6 @@ by mocks under `tests/mocks/`.
 ```
 tests/
 ├── mocks/        # PATH-overriding stubs for system commands
-├── fixtures/     # config and JSON snapshots for tests
 ├── unit/         # bats test files
 └── helpers.bash  # shared setup/teardown helpers
 ```

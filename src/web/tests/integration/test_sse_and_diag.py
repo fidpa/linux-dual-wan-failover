@@ -21,7 +21,7 @@ def _clean_state():
 
 def _csrf_post(client, path, json_body=None):
     client.get("/api/state")
-    cookie_obj = next((c for c in client._cookies.values() if c.key == CSRF_COOKIE_NAME), None)
+    cookie_obj = client.get_cookie(CSRF_COOKIE_NAME)
     assert cookie_obj is not None
     headers = {CSRF_HEADER_NAME: cookie_obj.value, "Origin": "http://localhost"}
     return client.post(path, headers=headers, json=json_body or {})

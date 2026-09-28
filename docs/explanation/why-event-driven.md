@@ -43,8 +43,10 @@ T+5.2s   main loop sees flag → emergency-failover code path
 T+5.3s   default route now via lte0
 ```
 
-**Total: ~5 seconds.** An SSH session might notice; a TCP connection
-that already has data in flight will likely survive.
+That is the design, not a measurement. The orchestrator picks up the flag
+only at the start of its next loop iteration and re-scores both interfaces
+before it switches, so in practice this path takes longer than five seconds.
+Established connections do not carry over to the backup either way.
 
 The five-second confirmation window matters: it filters out brief
 disconnect/reconnect bounces (NM rapidly emitting two events as the
@@ -66,6 +68,6 @@ Three reasons:
    notices in its scoring loop. There's no NM event for "you've used 96 %
    of your data this month."
 
-So: events are the fast path for the common case (interface fully dies),
+So: events are the fast path when the interface fully dies,
 polling is the comprehensive path for everything else, and they signal
 each other through a lockfile and SIGUSR1 to keep the two coordinated.

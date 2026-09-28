@@ -5,8 +5,9 @@
 #
 # Periodically scores both WAN interfaces, evaluates anti-flap and hysteresis
 # rules, and switches the default route when the backup outscores the
-# primary. Also handles SIGUSR1 from `nmcli-failover-monitor` for sub-second
-# emergency failover.
+# primary. Also handles SIGUSR1 from `nmcli-failover-monitor`: the signal is
+# picked up at the start of the next loop iteration and triggers an immediate
+# re-score, so a link loss skips the failure counter.
 #
 # Configured via /etc/linux-dual-wan-failover/failover.conf (overridable
 # via FAILOVER_CONF_PATH).

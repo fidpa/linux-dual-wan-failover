@@ -19,7 +19,7 @@ def _clean_rate_limit():
 
 def _csrf_put(client, path: str, *, data: dict[str, Any] | None = None, json_body: dict[str, Any] | None = None):
     client.get("/api/state")
-    cookie_obj = next((c for c in client._cookies.values() if c.key == CSRF_COOKIE_NAME), None)
+    cookie_obj = client.get_cookie(CSRF_COOKIE_NAME)
     assert cookie_obj is not None
     headers = {CSRF_HEADER_NAME: cookie_obj.value, "Origin": "http://localhost"}
     if json_body is not None:
