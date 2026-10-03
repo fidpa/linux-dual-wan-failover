@@ -265,6 +265,12 @@ LOG_DIR="${LOG_DIR:-/var/log/linux-dual-wan-failover}"
 STATE_DIR="${STATE_DIR:-/var/lib/linux-dual-wan-failover}"
 RUNTIME_DIR="${RUNTIME_DIR:-/run/linux-dual-wan-failover}"
 
+# Per-service log files next to the journal (bash-production-toolkit v3.x).
+# Default true, set in src/lib/common.sh. false keeps the journal only; the
+# toolkit v2.x always writes the files, the fallback logger never does.
+# See docs/reference/config.md, "Note on LOG_TO_FILE".
+#LOG_TO_FILE=false
+
 # ============================================================================
 # Optional Web-UI (failover-web.service)
 # ============================================================================

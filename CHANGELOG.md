@@ -5,6 +5,119 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-10-03: Log files and failover traces under bash-production-toolkit v3
+
+bash-production-toolkit v3.0.0, released on 2026-10-03, reworked the output
+channels of `logging.sh`. Log lines now go to stderr, which under systemd is the
+journal with a real priority per line, and `LOG_FILE` is written only with
+`LOG_TO_FILE=true`. With v0.10.1 on top of it, the service log files under
+`/var/log/linux-dual-wan-failover/` stay empty: a test unit started with
+`systemd-run` against v3.0.0 logged INFO, WARNING and ERROR at journal
+priorities 6, 4 and 3 and created no file. `trace-failover.sh` reads nothing but
+those files, so on such an install it finds no line for any Event-ID. The test
+suite could not notice, because `tests/helpers.bash` unsets `TOOLKIT_LIB` and
+every test ran the in-tree fallback logger.
+
+Checking the trace with a made-up Event-ID showed that it had been mostly blind
+before v3 as well. Since it shipped in v0.5.0, `trace-failover.sh` has looked
+for the orchestrator's lines in `failover-enhanced.log` and for
+`nmcli-failover-monitor`'s in `nmcli-monitor.log`. No code in this repository
+writes either file: `common.sh` sets `LOG_FILE` to `failover.log` before
+`nmcli-failover-monitor.sh` applies its own default, so both services write
+`failover.log`. With toolkit v2 only the `route-guardian` lane could match;
+without the toolkit, which means no files at all, none could.
+
+### Fixed
+
+- **The service log files are written again under toolkit v3.**
+  `src/lib/common.sh` now sets `LOG_TO_FILE=true` before it sources the toolkit,
+  so `failover.log` and `route-guardian.log` grow as they did under toolkit v2,
+  which wrote them unconditionally. With toolkit v2 the variable has no effect.
+  Without the toolkit there are still no files: the fallback logger writes to
+  stderr, which systemd sends to the journal.
+
+- **`trace-failover.sh` finds the lines of all three services.** Per service it
+  now searches the journal first, selected by the unit's `SyslogIdentifier`
+  (`nmcli-failover-monitor`, `failover-monitor`, `route-guardian`), and falls
+  back to the service's log file when the journal has no hit. The orchestrator's
+  file is now `failover.log`. A `Sources:` line names where each lane came from.
+  From the journal, `nmcli-failover-monitor`'s lines are attributed to it; from
+  the file they appear in the `[monitor]` lane, since that service shares
+  `failover.log`. Reading the system journal needs root or the `adm` or
+  `systemd-journal` group; without it the tool uses the files only, as before.
+
+- **An Event-ID no longer matches a longer one with the same prefix.** The grep
+  for `FAILOVER_EVENT_ID=123_45` also returned the lines of `123_456`; the match
+  now requires a non-digit or the end of the line after the ID.
+
+- **The waterfall is sorted by time in every locale.** `show_log_waterfall`
+  sorted on the text after the lane tag, including the padding spaces, which
+  differ per tag. Under the C locale that grouped the lines by service instead
+  of by timestamp. The sort now skips leading blanks and runs with `LC_ALL=C`.
+
+- **A SIGHUP no longer takes `route-guardian`'s logging out of the journal.**
+  `handle_sighup` ran `exec 1>>"$LOG_FILE" 2>&1` to "reopen the log after
+  rotation". That moved the daemon's stdout and stderr, which are the journal,
+  into the file; under toolkit v3 every later line then went to the file twice,
+  once with its `<6>[INFO]` journal prefix, and nothing more reached the journal
+  until a restart. Nothing needs reopening, because the loggers open the file for
+  every line, and nothing in this repository sends the signal. The handler now
+  only logs, and stays installed so a stray SIGHUP does not end the daemon.
+
+- **`src/tools/trace-failover.sh` is executable in the repository.** The README
+  and the how-to run it as `src/tools/trace-failover.sh`, which failed with
+  "Permission denied" on a fresh clone; `install.sh` already installed it 0755.
+
+### Added
+
+- **A test that loads the real toolkit.** `tests/unit/test_toolkit_logging.bats`
+  sources `common.sh` against the toolkit named by `TOOLKIT_TEST_LIB` and checks
+  that stdout stays clean, the lines reach stderr, `LOG_FILE` is written by
+  default and not with `LOG_TO_FILE=false`, sourcing sets no EXIT trap, and
+  `trace-failover.sh` finds an Event-ID the toolkit wrote. Without
+  `TOOLKIT_TEST_LIB` the tests are skipped. The CI `bats` job clones the toolkit
+  at tag `v3.0.0` and fails if the tag no longer points at commit `e998d5c`.
+  Against the v0.10.1 `common.sh` two of the seven tests fail.
+
+- **Tests for `trace-failover.sh`** (`tests/unit/test_trace_failover.bats`)
+  with a stubbed `journalctl`: lane attribution and order, the prefix match,
+  the file fallback, the journal winning over the file, and a malformed ID.
+
+### Changed
+
+- **Dead `LOG_TO_JOURNAL` assignments are gone** from `common.sh`,
+  `nmcli-failover-monitor.sh`, `route-guardian.sh` and `tests/helpers.bash`.
+  Toolkit v2 defaulted it to false, and v3 removed the variable; set to true,
+  v3 prints a one-time warning.
+
+#### Documentation corrected against the code
+
+- **Comments that described toolkit v2 as the only case** now describe both
+  versions and the fallback logger: the logging block in `common.sh` ("stdout is
+  the only path into the journal"), the `LOG_TO_STDOUT=false` exports in
+  `nmcli-failover-monitor.sh` and `route-guardian.sh`, and the
+  `route-guardian.sh` signal section, which relied on an EXIT trap from
+  `logging.sh` that v3 sets only with `LOG_PERFORMANCE=true`.
+- **`docs/how-to/trace-failover.md`** said the daemons write `FAILOVER_EVENT_ID`
+  to their file logs without the toolkit; without it they write no files. It
+  now has a table of which logger writes where, journal commands for the manual
+  trace, the corrected file names, and the attribution limit above.
+- **`docs/reference/config.md`** documents `LOG_TO_FILE` (new "Note on
+  `LOG_TO_FILE`"), `config/failover.conf.example` lists it commented out, and
+  `docs/how-to/install-from-source.md` notes that toolkit v3 needs Bash 4.2+.
+
+### Upgrade notes
+
+- **With toolkit v3, `failover.log` and `route-guardian.log` grow again.** They
+  stopped when the toolkit was upgraded to v3; with toolkit v2 nothing changes.
+  The project ships no logrotate policy for these files. Rotation by move is
+  safe, since the loggers open the file per line. To keep the journal only, set
+  `LOG_TO_FILE=false` in `/etc/linux-dual-wan-failover/failover.conf`.
+- **Under toolkit v3, `nmcli-failover-monitor` and `route-guardian` log to the
+  journal** even though both export `LOG_TO_STDOUT=false`, which v3 ignores
+  under systemd. With v2 their `log_*` lines went only to the files, so
+  `journalctl -u route-guardian` shows more than it used to.
+
 ## [0.10.1] - 2026-09-28: Failover time as measured in production, not as designed
 
 The README promised "Sub-10s WAN failover" and a typical failover latency of
@@ -1403,7 +1516,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.8...v0.10.0
 [0.9.8]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.7...v0.9.8

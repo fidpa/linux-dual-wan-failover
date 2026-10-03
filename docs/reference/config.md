@@ -27,6 +27,7 @@ high-level index.
 | Quota hard block | `QUOTA_HARD_BLOCK`, `QUOTA_HARD_BLOCK_PCT`, `QUOTA_HARD_BLOCK_ALLOW`, `QUOTA_HARD_BLOCK_STATE_DIR`, `QUOTA_BLOCK_NOTIFY_INTERVAL` | no (default: off; needs a quota provider; "failover blocked" alert at most every 3600 s) |
 | Hardware | `HARDWARE_TEMP_BACKEND` | no (default: `none`) |
 | Directories | `LOG_DIR`, `STATE_DIR`, `RUNTIME_DIR` | no (systemd units set them) |
+| Logging | `LOG_TO_FILE` | no (default: `true`; see note below) |
 | Toolkit | `TOOLKIT_LIB` | no (auto-detected) |
 
 ## Top 10 variables to know
@@ -121,6 +122,25 @@ check whether the uplink is merely saturated: DNS-over-HTTPS needs a TLS
 handshake (~3 RTT of small upstream packets), so a narrow *uplink* inflates
 DNS timing long before the link stops carrying traffic. Comparing DNS timing
 under downlink-saturation versus uplink-saturation separates the two cases.
+
+## Note on `LOG_TO_FILE`
+
+The services log through [bash-production-toolkit](https://github.com/fidpa/bash-production-toolkit)
+when it is installed. Since toolkit v3.0.0 the log lines go to stderr, which
+systemd turns into journal entries with the right priority
+(`journalctl -u route-guardian -p warning` works), and the service log files
+under `LOG_DIR` are written only with `LOG_TO_FILE=true`. The project sets that
+default in `src/lib/common.sh`, so the files exist as they did with toolkit
+v2.x, which wrote them unconditionally.
+
+Set `LOG_TO_FILE=false` to keep the journal only. The files then stop growing;
+[`trace-failover.sh`](../how-to/trace-failover.md) still works, because it
+reads the journal first. With toolkit v2.x the variable has no effect, and
+without the toolkit there are no files either way: the fallback logger in
+`common.sh` writes to stderr, so everything is in the journal.
+
+The project ships no logrotate policy for these files (only for the Web-UI
+logs). Rotation by move is safe: the loggers open the file for every line.
 
 ## Reading order for a new operator
 

@@ -25,7 +25,6 @@ setup_test_env() {
     export STATE_DIR="$TMPROOT/state"
     export LOG_DIR="$TMPROOT/log"
     export LOG_FILE="$LOG_DIR/test.log"
-    export LOG_TO_JOURNAL=false
     export LOG_TO_STDOUT=false
 
     # Default test interfaces; override per-test as needed.

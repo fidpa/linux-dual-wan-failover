@@ -1281,7 +1281,8 @@ normalize_active_wan_state() {
 # ============================================================================
 
 main() {
-    # v4.1.3 EMERGENCY FIX: Force stdout logging for systemd journal
+    # Console output on. Toolkit v2.x needs it to reach the journal (stdout);
+    # v3.x logs to stderr and ignores it under systemd.
     export LOG_TO_STDOUT=true
     export LOG_FORMAT=standard
 

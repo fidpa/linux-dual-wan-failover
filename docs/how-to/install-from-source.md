@@ -18,7 +18,11 @@ exactly what gets placed where, or who need to install on a distro the script do
 Recommended (but optional):
 - [`bash-production-toolkit`](https://github.com/fidpa/bash-production-toolkit)
   installed to `/usr/local/lib/bash-production-toolkit/`. The failover
-  services will auto-detect it and use its structured logging.
+  services auto-detect it and use its levelled logging: journal entries with
+  their real priority, plus the service log files under
+  `/var/log/linux-dual-wan-failover/` (`LOG_TO_FILE`, see
+  [config.md](../reference/config.md#note-on-log_to_file)). Toolkit v3.x
+  needs Bash 4.2+. Without the toolkit the services log to the journal only.
 
 ## Layout
 

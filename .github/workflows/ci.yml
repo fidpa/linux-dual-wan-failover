@@ -75,6 +75,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bats python3
+      # tests/unit/test_toolkit_logging.bats loads common.sh against a real
+      # toolkit; every other test runs the fallback logger. Pinned to a tag
+      # AND its commit, so a moved tag fails here instead of testing other
+      # code. Bumping the toolkit is a deliberate edit of both lines.
+      - name: Fetch bash-production-toolkit (pinned)
+        env:
+          TOOLKIT_TAG: v3.0.0
+          TOOLKIT_COMMIT: e998d5cf8b6a0d6177e19a61e54ced71099306a1
+        run: |
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TOOLKIT_TAG" \
+            https://github.com/fidpa/bash-production-toolkit.git "$RUNNER_TEMP/toolkit"
+          test "$(git -C "$RUNNER_TEMP/toolkit" rev-parse HEAD)" = "$TOOLKIT_COMMIT"
+          echo "TOOLKIT_TEST_LIB=$RUNNER_TEMP/toolkit/src/foundation" >> "$GITHUB_ENV"
       - name: Run unit tests
         run: bats --print-output-on-failure tests/unit/
 

@@ -14,8 +14,9 @@ set -uo pipefail
 # LOGGING SETUP
 # ============================================================================
 #
-# linux-dual-wan-failover relies on the bash-production-toolkit's logging.sh
-# for structured journald + file logging. The toolkit can be installed via:
+# linux-dual-wan-failover uses the bash-production-toolkit's logging.sh for
+# journal-aware, levelled logging plus the service log files. The toolkit
+# can be installed via:
 #
 #   - System-wide: /usr/local/lib/bash-production-toolkit/foundation/logging.sh
 #                  (recommended; install via the toolkit's install.sh)
@@ -75,17 +76,32 @@ fi
 # shellcheck disable=SC2034 # consumed by sourcing services (SCRIPT_VERSION)
 readonly PROJECT_VERSION
 
-# Logging defaults — MUST be set BEFORE sourcing the toolkit: its logging.sh
-# initializes these with `:=` at source time, so anything set afterwards is a
-# dead assignment. LOG_TO_STDOUT stays true because journald visibility relies
-# on it: the units run with StandardOutput=journal and docs/how-to/
-# debug-failover.md reads logs via `journalctl -u failover-monitor` — with the
-# toolkit loaded, stdout is the only path into the journal (LOG_TO_JOURNAL
-# stays false; the stderr fallback logger covers the no-toolkit case).
-# Note for callers: functions whose stdout is captured via `$(...)` must not
-# log without `>&2`, or the log line becomes part of the captured value.
+# Logging defaults — set BEFORE sourcing the toolkit. Its logging.sh fixes
+# LOG_LEVEL and LOG_PERFORMANCE at source time; LOG_FILE, LOG_TO_FILE and
+# LOG_TO_STDOUT are read on every call (measured against v3.0.0), but the
+# toolkit documents "before sourcing" for all of them, so this is where they go.
+#
+# Where a log line goes, by logger:
+#   toolkit v3.x  under systemd, stderr is the journal: one entry per line with
+#                 its real priority (journalctl -p warning works). In a
+#                 terminal, stderr while LOG_TO_STDOUT=true. LOG_FILE is only
+#                 written with LOG_TO_FILE=true, or by a terminal run with
+#                 LOG_TO_STDOUT=false. stdout is never used.
+#   toolkit v2.x  LOG_FILE always, plus stdout while LOG_TO_STDOUT=true (the
+#                 units send stdout to the journal). LOG_TO_FILE is ignored.
+#   fallback      stderr only (below), so the journal under systemd. No file.
+#
+# LOG_TO_FILE defaults to true because the project promises service log
+# files under /var/log/linux-dual-wan-failover/ (docs/how-to/trace-failover.md);
+# toolkit v2 wrote them unconditionally, v3 only on request. Under v3 and the
+# fallback the journal holds the same lines, which is how trace-failover.sh
+# also covers installs without the toolkit. Set LOG_TO_FILE=false in
+# failover.conf to keep the journal only (toolkit v3).
+#
+# Note for callers: with toolkit v2.x a log call inside `$(...)` lands in the
+# captured value unless it logs with `>&2`. v3 and the fallback use stderr.
 LOG_FILE="${LOG_FILE:-/var/log/linux-dual-wan-failover/failover.log}"
-LOG_TO_JOURNAL="${LOG_TO_JOURNAL:-false}"
+LOG_TO_FILE="${LOG_TO_FILE:-true}"
 LOG_TO_STDOUT="${LOG_TO_STDOUT:-true}"
 
 # Resolve the toolkit library directory.
@@ -113,8 +129,9 @@ if TOOLKIT_LIB_RESOLVED="$(_resolve_toolkit_lib)"; then
 fi
 
 # Minimal fallback logger if the toolkit is not available.
-# The failover services still log to stderr / journal via systemd, just
-# without structured fields. Override LOG_FILE to also write to a file.
+# It writes to stderr only, which systemd sends to the journal (at priority 6
+# for every level). LOG_FILE and LOG_TO_FILE are toolkit features and have no
+# effect here; trace-failover.sh reads the journal for exactly this case.
 if ! declare -F log_info &>/dev/null; then
     log_info()    { printf '%s [INFO] %s\n'    "$(date -u +%FT%TZ)" "$*" >&2; }
     log_warning() { printf '%s [WARN] %s\n'    "$(date -u +%FT%TZ)" "$*" >&2; }

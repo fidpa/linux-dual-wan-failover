@@ -25,7 +25,16 @@ bats tests/unit/test_quota.bats
 
 # With verbose output:
 bats --print-output-on-failure tests/unit/
+
+# Against a real bash-production-toolkit (otherwise these are skipped;
+# CI fetches the pinned release named in .github/workflows/ci.yml):
+TOOLKIT_TEST_LIB=/path/to/bash-production-toolkit/src/foundation \
+    bats tests/unit/test_toolkit_logging.bats
 ```
+
+Every other test runs `common.sh`'s fallback logger, because
+`setup_test_env` unsets `TOOLKIT_LIB`. Only `test_toolkit_logging.bats`
+covers the toolkit's output channels.
 
 ## Conventions
 

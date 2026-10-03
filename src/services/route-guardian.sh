@@ -164,8 +164,9 @@ if declare -f load_mattermost_config >/dev/null 2>&1; then
         log_warning "Mattermost config not loaded — alerts will use the generic plugin path"
 fi
 
-# Logging behaviour. Override via env / failover.conf if needed.
-export LOG_TO_JOURNAL="${LOG_TO_JOURNAL:-false}"
+# No console output. Read per log call, so this still applies after sourcing:
+# toolkit v2.x then logs to LOG_FILE only, v3.x ignores it under systemd (stderr
+# is the journal) and writes LOG_FILE instead of the console in a terminal.
 export LOG_TO_STDOUT="${LOG_TO_STDOUT:-false}"
 
 # Configure alerts.sh library (no-op if toolkit not loaded).
@@ -224,7 +225,7 @@ export ALERTS_PREFIX="${ALERTS_PREFIX:-Route Guardian}"
 #
 # 9. SIGNAL HANDLING — Graceful Shutdown und Log-Rotation (→ Zeile 1528)
 #    cleanup()                           SIGTERM/SIGINT Handler (kein exit, Best Practice 2025)
-#    handle_sighup()                     Log-Rotation via logrotate (fd reopen)
+#    handle_sighup()                     Catch SIGHUP (nothing to reopen)
 #
 # ============================================================================
 
@@ -1706,8 +1707,8 @@ EOF
 # ============================================================================
 
 # Signal handlers (Best Practice 2025: No exit in cleanup)
-# Note: logging.sh already sets trap 'log_performance' EXIT
-# We only need SIGTERM/SIGINT handlers
+# No EXIT trap here and none from logging.sh: toolkit v3 sets one only with
+# LOG_PERFORMANCE=true before sourcing (v2.x set it by default).
 # Trap-return alone did NOT stop the daemon: after the trap, bash resumed
 # the while-loop (wait returns, loop continues) and systemctl stop ran into
 # TimeoutStopSec (90s) + SIGKILL. The shutdown flag ends the loop at the
@@ -1717,22 +1718,24 @@ cleanup() {
     log_message "INFO" "SYSTEM" "Route Guardian shutting down (PID: $$)"
     _rg_shutdown=1
     # NO exit here - let signal handler return naturally
-    # The EXIT trap from logging.sh will run log_performance automatically
     return 0
 }
 
-# Signal handler for log rotation (Best Practice 2025)
-# Triggered by logrotate via systemctl kill -s HUP
+# SIGHUP is caught so that a stray `systemctl kill -s HUP` (or a logrotate
+# postrotate hook) does not terminate the daemon, which is bash's default.
+# There is nothing to reopen: logging.sh, the alerts log and `tee -a` open
+# LOG_FILE per write. This handler used to run `exec 1>>"$LOG_FILE" 2>&1`,
+# which moved stdout and stderr, i.e. the journal stream, into the file; under
+# toolkit v3 every later line then went to the file twice, once with its
+# "<N>[LEVEL]" journal prefix, and nothing more reached the journal.
 handle_sighup() {
-    # Reopen log files after rotation
-    exec 1>>"$LOG_FILE" 2>&1
-    log_message "INFO" "SIGNAL" "Log file reopened after rotation (SIGHUP received)"
+    log_message "INFO" "SIGNAL" "SIGHUP received - log files are opened per write, nothing to reopen"
     return 0
 }
 
 # Register signal handlers
 trap cleanup SIGTERM SIGINT
-trap 'handle_sighup' HUP  # v2.8: Zero-downtime log rotation support
+trap 'handle_sighup' HUP
 
 # ============================================================================
 # Library Mode Support for Testing (Best Practice 2025)

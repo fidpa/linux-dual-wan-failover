@@ -60,8 +60,14 @@ if [[ -n "${TOOLKIT_LIB:-}" && -f "${TOOLKIT_LIB}/../monitoring/smart-alerts.sh"
     source "${TOOLKIT_LIB}/../monitoring/smart-alerts.sh" 2>/dev/null || true
 fi
 
+# NOTE: common.sh has already set LOG_FILE (failover.log) by now, so the
+# nmcli-monitor.log default below never applies; this service shares
+# failover.log with failover-monitor. Kept as is: moving it would start a new
+# file on existing installs (see trace-failover.sh for how lines are told apart).
 export LOG_FILE="${LOG_FILE:-/var/log/linux-dual-wan-failover/nmcli-monitor.log}"
-export LOG_TO_JOURNAL="${LOG_TO_JOURNAL:-false}"
+# No console output. Read per log call, so this still applies after sourcing:
+# toolkit v2.x then logs to LOG_FILE only, v3.x ignores it under systemd (stderr
+# is the journal) and writes LOG_FILE instead of the console in a terminal.
 export LOG_TO_STDOUT="${LOG_TO_STDOUT:-false}"
 
 # Ensure log directory exists (systemd `LogsDirectory=` covers this in production).
