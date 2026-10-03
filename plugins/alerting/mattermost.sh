@@ -14,10 +14,8 @@
 #   ALERT_MATTERMOST_ICON_EMOJI   — emoji code (default: :rotating_light:)
 #   ALERT_MATTERMOST_TIMEOUT      — curl timeout in seconds (default: 5)
 #
-# If bash-production-toolkit is installed and exposes
-# `send_mattermost_alert`, this plugin delegates to it (rate-limiting,
-# retry logic, structured logging). Otherwise it falls back to a direct
-# `curl` POST.
+# Delivery is a direct `curl` POST. Rate limiting is the caller's job
+# (route-guardian: ALERT_RATE_LIMIT_SECONDS per alert type).
 
 ALERT_MATTERMOST_WEBHOOK_URL="${ALERT_MATTERMOST_WEBHOOK_URL:-}"
 ALERT_MATTERMOST_USERNAME="${ALERT_MATTERMOST_USERNAME:-linux-dual-wan-failover}"
@@ -44,13 +42,7 @@ send_alert() {
         return 0
     fi
 
-    # Delegate to the toolkit if available.
-    if declare -F send_mattermost_alert >/dev/null 2>&1; then
-        send_mattermost_alert "$alert_type" "$message" >/dev/null 2>&1
-        return 0
-    fi
-
-    # Fallback: direct curl POST. We let Python build the JSON payload to
+    # Direct curl POST. We let Python build the JSON payload to
     # get correct escaping for backslashes, control characters, and
     # Unicode — Bash printf-with-`//"/\\\"` does NOT cover those.
     local prefix

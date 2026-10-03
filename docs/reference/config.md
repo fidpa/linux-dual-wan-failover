@@ -22,7 +22,7 @@ high-level index.
 | Emergency failback | `EMERGENCY_FAILBACK_MIN_BACKUP_TIME`, `EMERGENCY_FAILBACK_DEGRADED_CHECKS`, `EMERGENCY_FAILBACK_DNS_THRESHOLD_MS` | no — but read the note below before lowering any of them |
 | Failback gating | `MIN_FAILBACK_SCORE`, `MIN_BACKUP_TIME`, `MIN_STABLE_DURATION`, `STABILITY_RESET_THRESHOLD` | no (sane defaults) |
 | Latency / loss | `DSL_LATENCY_*`, `LTE_LATENCY_*`, `PACKET_LOSS_*` | no (sane defaults) |
-| Alerting plugin | `ALERTING_BACKEND`, `ALERTING_PLUGIN_DIR`, `ALERTING_PLUGIN_PATH` | no (default: `none`) |
+| Alerting plugin | `ALERTING_BACKEND`, `ALERTING_PLUGIN_DIR`, `ALERTING_PLUGIN_PATH`, `ALERT_RATE_LIMIT_SECONDS` | no (default: `none`; route-guardian repeats an alert type at most every 300 s) |
 | Quota plugin | `QUOTA_PROVIDER`, `QUOTA_SNAPSHOT_PATH`, `QUOTA_SNAPSHOT_MAX_STALE_SEC`, `QUOTA_CAP_TIER_*` | no (default: `none`) |
 | Quota hard block | `QUOTA_HARD_BLOCK`, `QUOTA_HARD_BLOCK_PCT`, `QUOTA_HARD_BLOCK_ALLOW`, `QUOTA_HARD_BLOCK_STATE_DIR`, `QUOTA_BLOCK_NOTIFY_INTERVAL` | no (default: off; needs a quota provider; "failover blocked" alert at most every 3600 s) |
 | Hardware | `HARDWARE_TEMP_BACKEND` | no (default: `none`) |
@@ -139,8 +139,10 @@ reads the journal first. With toolkit v2.x the variable has no effect, and
 without the toolkit there are no files either way: the fallback logger in
 `common.sh` writes to stderr, so everything is in the journal.
 
-The project ships no logrotate policy for these files (only for the Web-UI
-logs). Rotation by move is safe: the loggers open the file for every line.
+`install.sh` installs `/etc/logrotate.d/linux-dual-wan-failover`
+(`systemd/failover-services.logrotate`): weekly, at the latest at 50 MB, eight
+compressed generations. Rotation by move is safe: the loggers open the file for
+every line.
 
 ## Reading order for a new operator
 

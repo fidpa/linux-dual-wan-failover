@@ -5,6 +5,119 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-10-03: route-guardian alerts reach the alerting plugin
+
+Following up on the v0.11.0 findings showed that `route-guardian` had never
+delivered an alert through the alerting plugin. It defined its own
+`send_alert`, the function name every plugin provides. `send_notification()` in
+`common.sh` loads the plugin only while no `send_alert` exists and then calls
+`send_alert`, so with `ALERTING_BACKEND` set the plugin was never loaded and
+each alert called back into the guardian: in a test unit, one alert produced
+129 calls of `send_notification()` within 3 s and no delivery, and the chain
+ran until the process was stopped. Every ERROR line the guardian logs starts
+such an alert. With the default `ALERTING_BACKEND=none` nothing was sent and
+nothing looped.
+
+The alert path also relied on `sa_track_event`, `sa_resolve_event`,
+`sa_get_downtime` and `sa_check_pending_events`, the API of a private library
+that neither this repository nor bash-production-toolkit provides. On every
+install, `DSL_ROUTE_MISSING` and `LTE_ROUTE_MISSING` died on the unset variable
+`SA_EVENTS_DIR` before they reached delivery, every recovery alert was
+suppressed, and the guardian loop logged "command not found" on every check
+(10 s by default). Both defects date back to v0.1.0.
+
+### Fixed
+
+- **route-guardian alerts are delivered through the configured plugin.** The
+  guardian's functions are now `rg_alert` and `rg_recovery_alert`; it no longer
+  defines `send_alert` or `send_recovery_alert`, and delivery runs through
+  `send_notification()` in the background. Measured with the webhook plugin:
+  one alert, one POST. `CRITICAL` alert types go out at level critical,
+  recoveries and completed repairs at info, everything else at warning.
+
+- **Route-missing alerts and recoveries work without a private library.**
+  `src/services/route-guardian.sh` keeps one marker file per open alert type
+  under `<state>/alerts/events/`. An alert type is sent at most once per
+  `ALERT_RATE_LIMIT_SECONDS` (default 300); repeats are logged instead. A
+  recovery is sent only for an open event and reports the downtime since the
+  first alert. Losing both default routes is one `BOTH_WANS_DOWN` alert at
+  critical level, decided by checking the other route instead of reading marker
+  files. A route that comes back without the guardian's repair (NetworkManager,
+  failback) now also closes its event. There is no grace period any more: the
+  first occurrence is alerted at once.
+
+- **route-guardian can write its state files without the toolkit.**
+  Without bash-production-toolkit it had no `sfu_write_file`, so the 30-minute
+  cooldown of preventive alerts, the repair counters and the LTE state file were
+  never written, and a preventive alert went out again on every check for as
+  long as its condition lasted. The local
+  fallback moved from `src/lib/routing.sh`, which only `failover-monitor`
+  loads, to `src/lib/common.sh`.
+
+- **nmcli-failover-monitor writes its own log file.** `LOG_FILE` was set after
+  `common.sh` had already set its default, so the service wrote into
+  `failover.log`. It now writes `nmcli-monitor.log`, as `trace-failover.sh`
+  expects; for older lines in `failover.log` see the trace how-to.
+
+- **The latency columns of the metrics collector hold measured values.**
+  `failover-metrics-collector.py` filled the primary and backup latency of the
+  RRD, of `failover_events` (`*_latency_before`) and of the metrics summary by
+  parsing `Latency=` lines from `failover-enhanced.log`. No code in this
+  repository writes that file or that line format, so the values were 0.0. They
+  now come from the collector's own WAN-quality probe (every 30 s); a value is
+  0.0 until the first probe of an interface succeeded, and 999.99 while no
+  probe target answers.
+
+- **The fallback `log_debug` returns 0 when debug output is off.** It returned
+  1, which ended `set -e` callers.
+
+### Added
+
+- **A logrotate policy for the service logs:** `systemd/failover-services.logrotate`,
+  installed by `install.sh` as `/etc/logrotate.d/linux-dual-wan-failover`.
+  `failover.log`, `nmcli-monitor.log`, `route-guardian.log` and
+  `route-guardian-alerts.log` rotate weekly or at 50 MB, eight compressed
+  generations, by move (the loggers open the file per line). The collector's
+  own log and the Web-UI logs keep their existing rotation. CI checks the
+  policy with `logrotate -d`.
+
+- **Tests for the guardian's alert path** (`tests/unit/test_route_guardian_alerts.bats`):
+  no `send_alert` defined, `sfu_write_file` present without the toolkit, single
+  delivery, rate limit, `BOTH_WANS_DOWN`, recovery with downtime. The guardian's
+  state directory can be redirected for tests with `ROUTE_GUARDIAN_STATE_DIR`.
+
+### Changed
+
+- **The guardian no longer loads the toolkit's `smart-alerts.sh`**, and neither
+  does `nmcli-failover-monitor`. Its API does not match the calls above, and it
+  brings its own `send_alert`. The `send_mattermost_alert_lib` shim and the
+  `load_mattermost_config` hook are gone with it.
+- **`plugins/alerting/mattermost.sh` no longer looks for `send_mattermost_alert`**,
+  a function bash-production-toolkit does not have. It always posts with `curl`.
+
+#### Documentation corrected against the code
+
+- **`docs/how-to/configure-mattermost.md`** added the webhook env file to
+  `failover-monitor.service` only; `route-guardian` then had no webhook URL and
+  dropped its alerts. Both units are now listed. The section on toolkit
+  delegation is replaced by how often the guardian alerts.
+- `ALERT_RATE_LIMIT_SECONDS` is listed in `config/failover.conf.example` and
+  `docs/reference/config.md`, and `plugins/alerting/README.md` states that code
+  sourcing `common.sh` must not define `send_alert`.
+
+### Upgrade notes
+
+- **With `ALERTING_BACKEND` set, route-guardian sends alerts for the first
+  time.** Expect messages for missing routes, recoveries and NetworkManager
+  issues, each type at most every `ALERT_RATE_LIMIT_SECONDS`. Make sure
+  `route-guardian.service` reads the same webhook env file as
+  `failover-monitor.service`.
+- **`nmcli-monitor.log` appears** next to `failover.log`, which gets fewer
+  lines in turn. Re-run `install.sh` or copy the logrotate policy by hand
+  (see `docs/how-to/install-from-source.md`).
+- **Grace-period settings of a private smart-alerts library have no effect.**
+  Delayed alerting is gone; the rate limit replaces the deduplication.
+
 ## [0.11.0] - 2026-10-03: Log files and failover traces under bash-production-toolkit v3
 
 bash-production-toolkit v3.0.0, released on 2026-10-03, reworked the output
@@ -1516,7 +1629,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.9.8...v0.10.0

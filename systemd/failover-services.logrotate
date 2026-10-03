@@ -1,0 +1,27 @@
+# logrotate policy for the linux-dual-wan-failover service logs.
+#
+# Install: cp systemd/failover-services.logrotate /etc/logrotate.d/linux-dual-wan-failover
+# (install.sh does this for you.)
+#
+# The daemons append to these files one line at a time and open the file for
+# every write (bash-production-toolkit's logging.sh, route-guardian's alerts
+# log and its `tee -a`), so plain move-based rotation is safe: no copytruncate,
+# no postrotate signal. With toolkit v3 the files exist only while
+# LOG_TO_FILE=true (the project default); missingok covers the rest.
+#
+# Not listed: failover-metrics-collector.log (the collector rotates it itself,
+# RotatingFileHandler) and the Web-UI logs (systemd/failover-web.logrotate).
+
+/var/log/linux-dual-wan-failover/failover.log
+/var/log/linux-dual-wan-failover/nmcli-monitor.log
+/var/log/linux-dual-wan-failover/route-guardian.log
+/var/log/linux-dual-wan-failover/route-guardian-alerts.log {
+    weekly
+    maxsize 50M
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 root root
+}

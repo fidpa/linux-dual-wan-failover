@@ -61,9 +61,9 @@ ID=3741608_1782676271
 # Journal: one service at a time (the ID is in the message text).
 sudo journalctl -t failover-monitor --grep "FAILOVER_EVENT_ID=$ID"
 
-# Files: chronological across both service logs.
+# Files: chronological across the three service logs.
 grep -hE "FAILOVER_EVENT_ID=$ID([^0-9]|\$)" \
-    /var/log/linux-dual-wan-failover/{failover,route-guardian}.log \
+    /var/log/linux-dual-wan-failover/{nmcli-monitor,failover,route-guardian}.log \
     | sort
 
 # The matching event-DB row.
@@ -90,12 +90,11 @@ EVENTS_DB=/var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-e
 - **5 s sampling**: two failovers inside one collector poll can share the same
   `last_failover_id` in the database (accepted sampling trade-off).
 - **Retention** bounds how far back the trace reaches: journald's limits for the
-  journal, your own rotation for the files (the project ships no logrotate
-  policy for the service logs).
-- **`nmcli-failover-monitor` writes `failover.log`**, not `nmcli-monitor.log`:
-  `common.sh` sets `LOG_FILE` before the service's own default would apply. In
-  the journal its lines are attributed correctly; from the files they appear in
-  the `[monitor]` lane.
+  journal, `/etc/logrotate.d/linux-dual-wan-failover` for the files (weekly,
+  eight generations, compressed).
+- **Up to v0.11.0 `nmcli-failover-monitor` wrote `failover.log`**, not
+  `nmcli-monitor.log`. In the journal those older lines are attributed
+  correctly; from the files they appear in the `[monitor]` lane.
 
 ## See also
 

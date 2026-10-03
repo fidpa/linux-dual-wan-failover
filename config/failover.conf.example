@@ -195,6 +195,9 @@ PACKET_LOSS_CRITICAL=20
 ALERTING_BACKEND=none
 ALERTING_PLUGIN_DIR=/usr/local/lib/linux-dual-wan-failover/plugins/alerting
 ALERTING_PLUGIN_PATH=
+# route-guardian sends each alert type at most once per this many seconds
+# (a missing route would otherwise alert on every 10 s check).
+ALERT_RATE_LIMIT_SECONDS=300
 
 # ============================================================================
 # Plugins — backup-link quota provider (optional)

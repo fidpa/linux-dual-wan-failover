@@ -185,6 +185,7 @@ jobs:
           # -d parses the config without touching anything; a private state
           # file keeps it independent of the runner's /var/lib/logrotate.
           logrotate -d -s "$(mktemp)" systemd/failover-web.logrotate
+          logrotate -d -s "$(mktemp)" systemd/failover-services.logrotate
       - name: Syntax-check sourced config examples
         run: |
           # failover.conf(.example) is `source`d by the daemon as bash —

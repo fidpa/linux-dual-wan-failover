@@ -32,9 +32,8 @@
 set -uo pipefail
 
 # Service log files (same file format: [TS] [LEVEL] msg [FIELDS]).
-# nmcli-failover-monitor writes failover.log, not nmcli-monitor.log, because
-# common.sh sets LOG_FILE before the service's own default would apply. Its
-# file lines therefore show up as [monitor] when the journal has none.
+# Up to v0.11.0 nmcli-failover-monitor wrote into failover.log, so its older
+# file lines show up as [monitor] when the journal has none.
 LOG_DIR="${LOG_DIR:-/var/log/linux-dual-wan-failover}"
 STATE_DIR="${STATE_DIR:-/run/linux-dual-wan-failover/wan-state}"
 EVENTS_DB="${EVENTS_DB:-/var/lib/linux-dual-wan-failover/failover-metrics-collector/failover-events.db}"

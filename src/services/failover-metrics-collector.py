@@ -58,7 +58,6 @@ STATE_PERSISTENCE_FILE = Path(
 # failover: grep FAILOVER_EVENT_ID=<id> /var/log/linux-dual-wan-failover/*.log.
 # See src/lib/event-id.sh.
 LAST_FAILOVER_ID_FILE = Path("/run/linux-dual-wan-failover/wan-state/last_failover_id")
-FAILOVER_LOG = Path("/var/log/linux-dual-wan-failover/failover-enhanced.log")
 
 # RRD Configuration
 RRD_DIR = Path("/var/lib/linux-dual-wan-failover/rrd")
@@ -240,6 +239,9 @@ class FailoverMetricsCollector:
         self.last_active_interface: str | None = self._load_persisted_state()
         self.failover_start_time: datetime | None = None
         self.last_metrics: dict[str, Any] = {}
+        # Latest latency_ms per role from collect_wan_quality(); 0.0 = not
+        # measured yet. Feeds RRD, failover_events and metrics_summary.
+        self.last_latency: dict[str, float] = {"primary": 0.0, "backup": 0.0}
         self.rrd_available: bool = self._check_rrd_available()
         self.event_start_timestamp: datetime | None = None
 
@@ -648,77 +650,29 @@ class FailoverMetricsCollector:
             )
             return None
 
-    def parse_detailed_metrics(self) -> tuple[float, float]:
+    def latest_latency(self) -> tuple[float, float]:
         """
-        Parse latency from recent failover-log entries.
+        Return ``(primary_latency_ms, backup_latency_ms)`` from the most recent
+        WAN-quality probe (``collect_wan_quality``, every 30 s).
 
-        Returns ``(primary_latency_ms, backup_latency_ms)`` for the configured
-        PRIMARY_IFACE / BACKUP_IFACE. Returns ``(0.0, 0.0)`` when the log file
-        is missing or no matching entries are present.
+        A value is ``0.0`` until the first probe of that interface succeeded,
+        and the probe's own sentinel (999.99) while no target answered. Until
+        v0.11.0 this parsed "Latency=" lines from failover-enhanced.log, a file
+        and a line format nothing in this project writes, so it returned
+        ``(0.0, 0.0)`` on every install.
         """
-        try:
-            if not FAILOVER_LOG.exists():
-                logger.debug("Failover log not found: %s", FAILOVER_LOG)
-                return 0.0, 0.0
+        return self.last_latency["primary"], self.last_latency["backup"]
 
-            result = subprocess.run(
-                ["tail", "-20", str(FAILOVER_LOG)],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-
-            if result.returncode != 0:
-                logger.debug(
-                    "tail command failed with code %d: %s",
-                    result.returncode,
-                    result.stderr,
-                )
-                return 0.0, 0.0
-
-            def _extract(line: str) -> float | None:
-                parts = line.split("Latency=")
-                if len(parts) <= 1:
-                    return None
-                latency_str = parts[1].split("ms")[0]
-                try:
-                    return float(latency_str)
-                except ValueError:
-                    return None
-
-            primary_latency = 0.0
-            backup_latency = 0.0
-            primary_tag = f"{PRIMARY_IFACE}:"
-            backup_tag = f"{BACKUP_IFACE}:"
-
-            for line in result.stdout.split("\n"):
-                if "Latency=" not in line:
-                    continue
-                if primary_tag in line:
-                    val = _extract(line)
-                    if val is not None:
-                        primary_latency = val
-                elif backup_tag in line:
-                    val = _extract(line)
-                    if val is not None:
-                        backup_latency = val
-
-            return primary_latency, backup_latency
-
-        except subprocess.TimeoutExpired:
-            logger.warning("Timeout reading failover log (5s exceeded)")
-            return 0.0, 0.0
-        except FileNotFoundError:
-            logger.debug("tail command not found")
-            return 0.0, 0.0
-        except (subprocess.SubprocessError, OSError) as e:
-            logger.error(
-                "Error parsing detailed metrics: %s",
-                e,
-                extra={"error_type": type(e).__name__},
-                exc_info=True,
-            )
-            return 0.0, 0.0
+    def _remember_latency(self, quality_data: dict[str, dict[str, Any]]) -> None:
+        """Keep latency_ms of the latest successful probe per role."""
+        for interface, data in quality_data.items():
+            role = self._interface_role(interface)
+            if role == "unknown":
+                continue
+            try:
+                self.last_latency[role] = float(data["latency_ms"])
+            except (KeyError, TypeError, ValueError):
+                continue
 
     def update_rrd(self, metrics: dict[str, Any]) -> None:
         """
@@ -738,7 +692,7 @@ class FailoverMetricsCollector:
             return
 
         try:
-            primary_latency, backup_latency = self.parse_detailed_metrics()
+            primary_latency, backup_latency = self.latest_latency()
 
             # RRD DS order: timestamp, primary_score, backup_score,
             # primary_latency, backup_latency, primary_loss, backup_loss,
@@ -941,7 +895,7 @@ class FailoverMetricsCollector:
             conn = sqlite3.connect(str(SQLITE_FILE))
             cursor = conn.cursor()
 
-            primary_latency, backup_latency = self.parse_detailed_metrics()
+            primary_latency, backup_latency = self.latest_latency()
 
             # NEW: Read actual failover duration from Bash script (millisecond-precision)
             actual_duration_ms = self._read_bash_failover_duration()
@@ -1169,7 +1123,7 @@ class FailoverMetricsCollector:
             conn = sqlite3.connect(str(SQLITE_FILE))
             cursor = conn.cursor()
 
-            primary_latency, backup_latency = self.parse_detailed_metrics()
+            primary_latency, backup_latency = self.latest_latency()
 
             # Insert or replace metrics summary (keep only last 7 days)
             cursor.execute(
@@ -1746,6 +1700,7 @@ class FailoverMetricsCollector:
                         logger.debug("Collecting WAN quality metrics...")
                         quality_data = self.collect_wan_quality()
                         if quality_data:
+                            self._remember_latency(quality_data)
                             self.save_wan_quality_metrics(quality_data)
                             self.export_wan_quality_prometheus(quality_data)
 

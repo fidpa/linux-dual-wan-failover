@@ -1,7 +1,13 @@
 # Alerting plugins
 
-Selectable backends for `failover-monitor`'s `send_notification()` hook.
-Set `ALERTING_BACKEND` in `failover.conf` to choose one.
+Selectable backends for the `send_notification()` hook in `src/lib/common.sh`,
+which `failover-monitor` and `route-guardian` call. Set `ALERTING_BACKEND` in
+`failover.conf` to choose one.
+
+`send_notification()` loads the plugin only while no `send_alert` function
+exists, then calls `send_alert`. Code that sources `common.sh` must therefore
+never define a `send_alert` of its own: up to v0.11.0 `route-guardian.sh` did,
+the plugin was never loaded, and every alert looped back into the guardian.
 
 ## Built-in plugins
 

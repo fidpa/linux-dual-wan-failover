@@ -41,6 +41,11 @@ readonly LIB_DIR
 
 # ---- Library imports --------------------------------------------------------
 
+# Own log file. Must be set before common.sh, which otherwise sets its default
+# (failover.log); until v0.11.0 it was set afterwards and never took effect, so
+# this service wrote into failover-monitor's file.
+export LOG_FILE="${LOG_FILE:-/var/log/linux-dual-wan-failover/nmcli-monitor.log}"
+
 # common.sh handles toolkit-aware logging.sh resolution and provides a
 # minimal fallback logger if the toolkit is not installed.
 # shellcheck source=../lib/common.sh
@@ -54,17 +59,6 @@ source "${LIB_DIR}/common.sh" || {
 source "${LIB_DIR}/script-watch.sh" 2>/dev/null || \
     log_warning "script-watch.sh not loaded — automatic restart on code update disabled"
 
-# Optional: smart-alerts.sh from bash-production-toolkit for event aggregation.
-if [[ -n "${TOOLKIT_LIB:-}" && -f "${TOOLKIT_LIB}/../monitoring/smart-alerts.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${TOOLKIT_LIB}/../monitoring/smart-alerts.sh" 2>/dev/null || true
-fi
-
-# NOTE: common.sh has already set LOG_FILE (failover.log) by now, so the
-# nmcli-monitor.log default below never applies; this service shares
-# failover.log with failover-monitor. Kept as is: moving it would start a new
-# file on existing installs (see trace-failover.sh for how lines are told apart).
-export LOG_FILE="${LOG_FILE:-/var/log/linux-dual-wan-failover/nmcli-monitor.log}"
 # No console output. Read per log call, so this still applies after sourcing:
 # toolkit v2.x then logs to LOG_FILE only, v3.x ignores it under systemd (stderr
 # is the journal) and writes LOG_FILE instead of the console in a terminal.

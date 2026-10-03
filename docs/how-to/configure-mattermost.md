@@ -25,13 +25,18 @@ sudo chmod 600 /etc/linux-dual-wan-failover/mattermost.env
 sudo chown root:root /etc/linux-dual-wan-failover/mattermost.env
 ```
 
-## Wire it into the service
+## Wire it into the services
 
-Add the env file to `failover-monitor.service`:
+Two services send alerts: `failover-monitor` (failovers, failbacks) and
+`route-guardian` (missing or duplicate routes, both WANs down). Add the env
+file to both, or the one without it drops its alerts silently:
 
 ```bash
 sudo systemctl edit failover-monitor.service
+sudo systemctl edit route-guardian.service
 ```
+
+In each, add:
 
 ```ini
 [Service]
@@ -49,7 +54,7 @@ Restart and verify:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl restart failover-monitor.service
-sudo systemctl restart route-guardian.service  # also alerts on duplicate-route incidents
+sudo systemctl restart route-guardian.service
 ```
 
 ## Test
@@ -75,9 +80,12 @@ seconds. If not:
 - `curl -i $ALERT_MATTERMOST_WEBHOOK_URL -d 'payload={"text":"hi"}'`
   (raw test of the webhook, bypasses the plugin).
 
-## Optional: bash-production-toolkit integration
+## How often route-guardian alerts
 
-If you have [bash-production-toolkit](https://github.com/fidpa/bash-production-toolkit)
-installed, the Mattermost plugin auto-detects and delegates to its
-`send_mattermost_alert` function — which adds rate-limiting, retry logic,
-and structured logging. No additional config.
+`route-guardian` checks every 10 s, so a route that stays missing would alert
+on every check. It sends an alert type at most once per
+`ALERT_RATE_LIMIT_SECONDS` (default 300) and logs the repeats instead. When the
+route is back, it sends one recovery message with the downtime, counted from
+the first alert. Losing both default routes at once is reported as one
+`BOTH_WANS_DOWN` alert at critical level. There is no grace period: the first
+occurrence is alerted at once.

@@ -100,6 +100,17 @@ install_systemd_units() {
     systemctl daemon-reload
 }
 
+# Rotation for the service logs under /var/log/linux-dual-wan-failover/.
+# Without it they grow without bound (the toolkit does not rotate them).
+install_logrotate() {
+    if [[ -d /etc/logrotate.d ]]; then
+        install -m 644 "${REPO_ROOT}/systemd/failover-services.logrotate" \
+            /etc/logrotate.d/linux-dual-wan-failover
+    else
+        echo "WARNING: /etc/logrotate.d not found — install systemd/failover-services.logrotate manually or the service logs will grow unbounded." >&2
+    fi
+}
+
 install_config() {
     install -d -m 755 "${ETC_DIR}"
     if [[ ! -f "${ETC_DIR}/failover.conf" ]]; then
@@ -277,6 +288,7 @@ main() {
     install_alerting_plugins
     install_quota_template
     install_systemd_units
+    install_logrotate
     install_config
     if (( WITH_WEB_UI == 1 )); then
         echo "Installing optional Web-UI into ${LIB_DIR}/web ..."

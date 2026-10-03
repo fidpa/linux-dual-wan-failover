@@ -9,30 +9,8 @@
 #
 set -uo pipefail
 
-# secure-file-utils.sh provides atomic-write helpers (sfu_write_file etc.)
-# from bash-production-toolkit. common.sh has already resolved the toolkit
-# location into $TOOLKIT_LIB before routing.sh is sourced. We source it
-# from there if available, otherwise fall back to a minimal local
-# implementation so the failover services still operate.
-
-if [[ -n "${TOOLKIT_LIB:-}" && -f "${TOOLKIT_LIB}/secure-file-utils.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${TOOLKIT_LIB}/secure-file-utils.sh"
-fi
-
-if ! declare -F sfu_write_file >/dev/null 2>&1; then
-    # Minimal fallback: atomic write via mktemp + mv. No locking, no
-    # permission preservation beyond what `install -m` provides.
-    sfu_write_file() {
-        local content="$1"
-        local target="$2"
-        local mode="${3:-644}"
-        local tmp
-        tmp="$(mktemp "${target}.XXXXXX")" || return 1
-        printf '%s' "$content" > "$tmp" || { rm -f "$tmp"; return 1; }
-        install -m "$mode" "$tmp" "$target" && rm -f "$tmp"
-    }
-fi
+# sfu_write_file (atomic writes) is provided by common.sh, which every service
+# sources first: the toolkit's secure-file-utils.sh, or a local fallback.
 
 # Failover Event-ID (Correlation-ID) helper — best-effort, never fatal: a
 # missing helper must not block a failover (the lockfile mint falls back inline

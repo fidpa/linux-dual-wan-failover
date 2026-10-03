@@ -54,6 +54,7 @@ Recommended (but optional):
 /var/lib/linux-dual-wan-failover/    # state (auto-created by systemd StateDirectory=)
 /var/lib/linux-dual-wan-failover-quota-block/   # quota hard block state (only with QUOTA_HARD_BLOCK=true)
 /var/log/linux-dual-wan-failover/    # logs (auto-created by systemd LogsDirectory=)
+/etc/logrotate.d/linux-dual-wan-failover   # rotation for the service logs
 /run/linux-dual-wan-failover/        # runtime (auto-created by systemd RuntimeDirectory=)
 ```
 
@@ -92,6 +93,10 @@ sudo install -m 755 \
 # it is easier to let `install.sh --with-web-ui` handle that whole branch
 # (venv, failover-web user, sudoers, tmpfiles, logrotate).
 sudo install -m 644 systemd/*.service systemd/*.timer /etc/systemd/system/
+
+# Rotation for the service logs (failover.log, nmcli-monitor.log,
+# route-guardian.log, route-guardian-alerts.log).
+sudo install -m 644 systemd/failover-services.logrotate /etc/logrotate.d/linux-dual-wan-failover
 
 # 4. Config.
 sudo install -d -m 755 /etc/linux-dual-wan-failover
@@ -141,6 +146,7 @@ sudo nft delete table inet ldwf_quota_block 2>/dev/null
 sudo sed -i '\#include "/var/lib/linux-dual-wan-failover-quota-block/\*.nft"#d' /etc/nftables.conf
 
 sudo rm -f /etc/systemd/system/{failover-monitor,nmcli-failover-monitor,route-guardian,failover-metrics-collector,failover-monitor-health-check,quota-hard-block}.{service,timer}
+sudo rm -f /etc/logrotate.d/linux-dual-wan-failover
 sudo rm -rf /usr/local/lib/linux-dual-wan-failover
 sudo rm -rf /var/lib/linux-dual-wan-failover /var/lib/linux-dual-wan-failover-quota-block /var/log/linux-dual-wan-failover
 

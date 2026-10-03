@@ -41,7 +41,8 @@ if [[ -z "${LOG_FILE:-}" ]]; then
     readonly LOG_FILE="/var/log/linux-dual-wan-failover/route-guardian.log"
 fi
 
-readonly STATE_DIR="/var/lib/linux-dual-wan-failover/route-guardian"
+# ROUTE_GUARDIAN_STATE_DIR: test hook, the unit's StateDirectory= is this path
+readonly STATE_DIR="${ROUTE_GUARDIAN_STATE_DIR:-/var/lib/linux-dual-wan-failover/route-guardian}"
 
 # Rate-limit marker per interface. A single shared marker meant that if both
 # default routes went missing at once — a NetworkManager restart does this — the
@@ -83,7 +84,12 @@ readonly REPAIR_FAILURE_COUNTER="${STATE_DIR}/route-guardian-failure.count"
 
 # Alert configuration
 readonly ALERT_STATE_DIR="${STATE_DIR}/alerts"
+readonly ALERT_EVENTS_DIR="${ALERT_STATE_DIR}/events"
 readonly PREVENTIVE_ALERT_COOLDOWN=1800  # 30 minutes between preventive alerts
+# Minimum seconds between two alerts of the same type (see rg_alert)
+ALERT_RATE_LIMIT_SECONDS="${ALERT_RATE_LIMIT_SECONDS:-300}"
+[[ "$ALERT_RATE_LIMIT_SECONDS" =~ ^[0-9]+$ ]] || ALERT_RATE_LIMIT_SECONDS=300
+readonly ALERT_RATE_LIMIT_SECONDS
 
 # ============================================================================
 # FAILOVER STATE AWARENESS
@@ -105,7 +111,7 @@ get_expected_primary_metric() {
 # Ensure log directory exists
 mkdir -p "$(dirname "$LOG_FILE")"
 mkdir -p "$STATE_DIR"
-mkdir -p "${STATE_DIR}/alerts"
+mkdir -p "${STATE_DIR}/alerts" "$ALERT_EVENTS_DIR"
 
 # Create log file with readable permissions (allows troubleshooting without sudo)
 touch "$LOG_FILE"
@@ -132,56 +138,25 @@ source "${LIB_DIR}/common.sh" || {
     exit 1
 }
 
-# Optional: smart-alerts.sh from bash-production-toolkit for event aggregation.
-if [[ -n "${TOOLKIT_LIB:-}" && -f "${TOOLKIT_LIB}/../monitoring/smart-alerts.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${TOOLKIT_LIB}/../monitoring/smart-alerts.sh" 2>/dev/null || true
-fi
-
 # Optional: code-change detection for clean restart on git-pull deployments.
 # shellcheck source=../lib/script-watch.sh
 source "${LIB_DIR}/script-watch.sh" 2>/dev/null || \
     log_warning "script-watch.sh not loaded — automatic restart on code update disabled"
-
-# Backwards-compat shim: a few legacy code paths in this file still call
-# `send_mattermost_alert_lib` directly. Provide a stub that delegates to the
-# generic plugin-based send_alert (or no-ops if no plugin is configured),
-# so route-guardian doesn't hard-fail when the toolkit isn't installed.
-if ! declare -f send_mattermost_alert_lib >/dev/null 2>&1; then
-    send_mattermost_alert_lib() {
-        local alert_type="${1:-INFO_FAILOVER}"
-        local message="${2:-}"
-        if declare -f send_notification >/dev/null 2>&1; then
-            send_notification "$message" "${alert_type#*_}" || true
-        fi
-        return 0
-    }
-fi
-
-# Optional toolkit hook: configures Mattermost credentials if available.
-if declare -f load_mattermost_config >/dev/null 2>&1; then
-    load_mattermost_config || \
-        log_warning "Mattermost config not loaded — alerts will use the generic plugin path"
-fi
 
 # No console output. Read per log call, so this still applies after sourcing:
 # toolkit v2.x then logs to LOG_FILE only, v3.x ignores it under systemd (stderr
 # is the journal) and writes LOG_FILE instead of the console in a terminal.
 export LOG_TO_STDOUT="${LOG_TO_STDOUT:-false}"
 
-# Configure alerts.sh library (no-op if toolkit not loaded).
-export RATE_LIMIT_SECONDS="${ALERT_RATE_LIMIT_SECONDS:-300}"
-export ALERTS_PREFIX="${ALERTS_PREFIX:-Route Guardian}"
-
 
 # ============================================================================
 # MODULE MAP — 30 Funktionen in 9 Gruppen
 # ============================================================================
 #
-# 1. ALERT DELIVERY — Mattermost, Smart Alerts, Präventiv-Alerts, Logging (→ Zeile 257)
-#    _send_alert_direct()                Direkte Mattermost-Zustellung via alerts.sh
-#    send_alert()                        Smart Alert Wrapper mit Grace Period
-#    send_recovery_alert()               Recovery-Alerts mit Downtime-Suppression
+# 1. ALERT DELIVERY — plugin delivery, event bookkeeping, preventive alerts, logging
+#    _rg_deliver()                       Hand one alert to send_notification() (async)
+#    rg_alert()                          Alert with per-type rate limit, opens an event
+#    rg_recovery_alert()                 Recovery for an open event, with its downtime
 #    send_preventive_alert()             Präventive Alerts mit 30min Cooldown
 #    log_message()                       logging.sh Wrapper mit Component-basiertem Alert-Routing
 #
@@ -233,94 +208,117 @@ export ALERTS_PREFIX="${ALERTS_PREFIX:-Route Guardian}"
 # ALERT DELIVERY
 # ============================================================================
 
-# "Dumb" send function — no rate-limiting or grace-period logic, just delivery.
-# Called directly and as the callback for the smart-alert grace queue. The
-# actual delivery target is whatever the configured ALERTING_BACKEND plugin
-# decides (mattermost / webhook / none / custom). The helper name is kept for
-# legacy compatibility with the optional smart-alerts toolkit module.
-_send_alert_direct() {
-    local alert_type="$1"
-    local message="$2"
-    local details="${3:-}"
+# Delivery goes through common.sh's send_notification(), which loads the
+# ALERTING_BACKEND plugin. This file must not define send_alert or
+# send_recovery_alert: send_alert is the plugin contract, and
+# send_notification() loads the plugin only while no send_alert exists, then
+# calls send_alert. Until v0.11.0 this file defined both, so the plugin was
+# never loaded and every alert called back into this file in an endless chain
+# of background calls that delivered nothing.
+#
+# Level: CRITICAL -> critical, recoveries and completed repairs -> info,
+# everything else -> warning. Runs in the background so a slow webhook never
+# holds up the guardian loop.
+_rg_deliver() {
+    local level="$1"
+    local alert_type="$2"
+    local message="$3"
+    local details="${4:-}"
 
-    # Build enriched message with Route Guardian context
-    local enriched="$message"
-    [[ -n "$details" ]] && enriched+=$'\n'"$details"
-    enriched+=$'\n\n'"_$(date '+%Y-%m-%d %H:%M:%S') | $(hostname)_"
+    local text="Route Guardian ${alert_type}: ${message}"
+    [[ -n "$details" ]] && text+=$'\n'"$details"
+    text+=$'\n\n'"_$(date '+%Y-%m-%d %H:%M:%S') | $(hostname)_"
 
-    # Delegate to the alert plugin loaded by common.sh / the toolkit.
-    send_mattermost_alert_lib "$alert_type" "$enriched"
+    send_notification "$text" "$level" >/dev/null 2>&1 &
+    return 0
 }
 
-# Smart-alert wrapper — applies grace-period logic before delivery and then
-# calls _send_alert_direct() for the actual send.
-send_alert() {
+# Event bookkeeping, one marker file per alert type under ALERT_EVENTS_DIR:
+# content = epoch second the event opened, mtime = last alert sent. A marker
+# turns a repeat of the same alert within ALERT_RATE_LIMIT_SECONDS into a log
+# line, and lets rg_recovery_alert() report the downtime. No grace period: the
+# first occurrence is alerted at once. Bookkeeping runs in the caller's process,
+# so a recovery in the same cycle sees the marker the alert just wrote.
+_rg_event_file() {
+    local alert_type="${1//[^A-Za-z0-9_]/_}"
+    printf '%s/%s.event' "$ALERT_EVENTS_DIR" "$alert_type"
+}
+
+rg_alert() {
     local alert_type="$1"
     local message="$2"
     local details="${3:-}"
+    local level="warning"
 
-    # Determine severity based on alert type
-    local severity="NORMAL"
-    # v3.5.0: original_alert_type removed (dedup handled by smart-alerts)
-
-    # Critical events that bypass grace period
     case "$alert_type" in
-        NETWORKMANAGER_CRITICAL)
-            severity="CRITICAL"
+        NETWORKMANAGER_CRITICAL|PREFLIGHT_CRITICAL|ROUTE_VACUUM_CRITICAL)
+            level="critical"
             ;;
-        DSL_ROUTE_MISSING)
-            # Check if LTE is also down (both WANs down = critical)
-            if [[ ! -f "${SA_EVENTS_DIR}/LTE_ROUTE_MISSING.event" ]] && ! check_route_exists "$LTE_INTERFACE" "$LTE_GATEWAY"; then
-                # Both WANs down - critical!
-                severity="CRITICAL"
+        DSL_ROUTE_MISSING|LTE_ROUTE_MISSING)
+            # Both default routes gone at once is one alert of its own. The
+            # other route is measured here, not inferred from marker files.
+            local other_iface="$LTE_INTERFACE" other_gw="$LTE_GATEWAY"
+            if [[ "$alert_type" == "LTE_ROUTE_MISSING" ]]; then
+                other_iface="$DSL_INTERFACE"
+                other_gw="$DSL_GATEWAY"
+            fi
+            if ! check_route_exists "$other_iface" "$other_gw"; then
                 alert_type="BOTH_WANS_DOWN"
+                level="critical"
                 message="CRITICAL: Both WAN connections down! DSL and LTE routes missing."
             fi
             ;;
-        LTE_ROUTE_MISSING)
-            # v3.1.1: Prevent BOTH_WANS_DOWN duplication
-            # If BOTH_WANS_DOWN already tracked/alerted, skip this event
-            if [[ -f "${SA_EVENTS_DIR}/BOTH_WANS_DOWN.event" ]] || [[ -f "${SA_PENDING_DIR}/BOTH_WANS_DOWN.pending" ]]; then
-                log_message "DEBUG" "SMART_ALERT" "BOTH_WANS_DOWN already tracked, skipping duplicate LTE_ROUTE_MISSING check"
-                # Continue with normal LTE_ROUTE_MISSING handling
-            elif [[ ! -f "${SA_EVENTS_DIR}/DSL_ROUTE_MISSING.event" ]] && ! check_route_exists "$DSL_INTERFACE" "$DSL_GATEWAY"; then
-                # Both WANs down - critical!
-                severity="CRITICAL"
-                alert_type="BOTH_WANS_DOWN"
-                message="CRITICAL: Both WAN connections down! DSL and LTE routes missing."
-            fi
+        *_RECOVERED|ROUTE_CLEANUP|ROUTE_METRIC_REPAIRED)
+            level="info"
             ;;
     esac
 
-    # Track event with smart alerts (v3.1.1: logging done in sa_track_event)
-    if sa_track_event "$alert_type" "$severity" "$message" "$details"; then
-        # Event entered grace period - no immediate alert (logged by sa_track_event)
-        return 0
+    local marker now
+    marker="$(_rg_event_file "$alert_type")"
+    now=$(date +%s)
+    if [[ -f "$marker" ]]; then
+        local last_sent
+        last_sent=$(stat -c %Y "$marker" 2>/dev/null || echo 0)
+        if (( now - last_sent < ALERT_RATE_LIMIT_SECONDS )); then
+            log_message "DEBUG" "ALERT" "$alert_type alerted $(( now - last_sent ))s ago - not repeated (ALERT_RATE_LIMIT_SECONDS=${ALERT_RATE_LIMIT_SECONDS})"
+            return 0
+        fi
+        touch "$marker" 2>/dev/null || true
     else
-        # Critical event or grace period bypassed - send immediately (logged by sa_track_event)
-        _send_alert_direct "$alert_type" "$message" "$details" &
-        return 0
+        printf '%s\n' "$now" > "$marker" 2>/dev/null || true
     fi
+
+    _rg_deliver "$level" "$alert_type" "$message" "$details"
+    return 0
 }
 
-# Smart recovery wrapper (v3.1.0: Suppress recovery alerts for short downtimes)
-send_recovery_alert() {
+# Close the open event of this type and report how long it lasted. Without an
+# open event nothing was alerted, so nothing is reported either. A route that
+# comes back also ends BOTH_WANS_DOWN.
+rg_recovery_alert() {
     local event_type="$1"
     local message="$2"
     local details="${3:-}"
 
-    # Resolve event and check if recovery alert should be sent
-    if sa_resolve_event "$event_type" "$message"; then
-        # Downtime was long enough - send recovery alert
-        local downtime
-        downtime=$(sa_get_downtime "$event_type")
-        log_message "INFO" "SMART_ALERT" "Sending recovery alert for $event_type (downtime: ${downtime}s)"
-        _send_alert_direct "RECOVERY_${event_type}" "$message" "$details" &
-    else
-        # Short downtime - suppress recovery alert
-        log_message "INFO" "SMART_ALERT" "Recovery alert suppressed for $event_type (downtime < threshold)"
+    local types=("$event_type")
+    if [[ "$event_type" == "DSL_ROUTE_MISSING" || "$event_type" == "LTE_ROUTE_MISSING" ]]; then
+        types+=("BOTH_WANS_DOWN")
     fi
 
+    local t marker opened now reported=false
+    now=$(date +%s)
+    for t in "${types[@]}"; do
+        marker="$(_rg_event_file "$t")"
+        [[ -f "$marker" ]] || continue
+        opened=$(head -n1 "$marker" 2>/dev/null || echo "")
+        [[ "$opened" =~ ^[0-9]+$ ]] || opened=$now
+        rm -f "$marker" 2>/dev/null || true
+        [[ "$reported" == "true" ]] && continue
+        log_message "INFO" "ALERT" "Sending recovery alert for $t (downtime: $(( now - opened ))s)"
+        _rg_deliver "info" "RECOVERY_${t}" "$message" \
+            "${details:+$details$'\n'}Downtime: $(( now - opened ))s"
+        reported=true
+    done
     return 0
 }
 
@@ -347,8 +345,8 @@ send_preventive_alert() {
         fi
     fi
 
-    # v3.4.0: Send directly (bypass smart alert grace period - preventive alerts have own cooldown)
-    _send_alert_direct "$alert_type" "$message" "$details" &
+    # Own 30-minute cooldown below, so straight to delivery
+    _rg_deliver "warning" "$alert_type" "$message" "$details"
 
     # Update preventive alert timestamp
     sfu_write_file "$(date +%s)" "$alert_file"
@@ -400,16 +398,16 @@ log_message() {
         # Send alert for critical issues (component-based routing)
         case "$component" in
             "DSL"|"LTE")
-                send_alert "ROUTE_FAILURE" "$component: $message" "Interface: ${component,,}" &
+                rg_alert "ROUTE_FAILURE" "$component: $message" "Interface: ${component,,}"
                 ;;
             "NETMGR")
-                send_alert "NETWORKMANAGER_ERROR" "$message" "Component: NetworkManager Configuration" &
+                rg_alert "NETWORKMANAGER_ERROR" "$message" "Component: NetworkManager Configuration"
                 ;;
             "SUBNET")
-                send_alert "SUBNET_ROUTE_MISSING" "$message" "Local network connectivity affected" &
+                rg_alert "SUBNET_ROUTE_MISSING" "$message" "Local network connectivity affected"
                 ;;
             *)
-                send_alert "SYSTEM_ERROR" "$message" "Component: $component" &
+                rg_alert "SYSTEM_ERROR" "$message" "Component: $component"
                 ;;
         esac
     fi
@@ -688,7 +686,7 @@ add_missing_route() {
     fi
 
     # Release here in ALL cases, including when the caller took the lock:
-    # everything below forks (send_recovery_alert starts the Mattermost curl with
+    # everything below forks (rg_recovery_alert starts the plugin delivery with
     # '&') and would otherwise carry the descriptor out of the region. The
     # caller's own release afterwards is a no-op.
     _release_route_lock
@@ -696,9 +694,17 @@ add_missing_route() {
     if [[ $add_ok -eq 0 ]]; then
         log_message "SUCCESS" "REPAIR" "Successfully added route for $interface"
 
-        # v3.1.0: Use smart recovery alert (suppresses short downtimes)
-        local event_type="${interface^^}_ROUTE_MISSING"  # DSL → DSL_ROUTE_MISSING
-        send_recovery_alert "$event_type" "✅ Route successfully restored" "Interface: $interface, Gateway: $gateway, Metric: $metric"
+        # Closes the event monitor_default_routes() opened. The alert types are
+        # named after the role, not the interface (eth0 -> DSL_ROUTE_MISSING).
+        local event_type=""
+        if [[ "$interface" == "$DSL_INTERFACE" ]]; then
+            event_type="DSL_ROUTE_MISSING"
+        elif [[ "$interface" == "$LTE_INTERFACE" ]]; then
+            event_type="LTE_ROUTE_MISSING"
+        fi
+        if [[ -n "$event_type" ]]; then
+            rg_recovery_alert "$event_type" "✅ Route successfully restored" "Interface: $interface, Gateway: $gateway, Metric: $metric"
+        fi
 
         touch "$(_repair_marker "$interface")"
         increment_success_count
@@ -774,7 +780,7 @@ check_networkmanager_configuration() {
             "$WAN_PRIMARY_CONNECTION")
                 if [[ "$never_default" == "yes" ]]; then
                     log_message "CRITICAL" "NETMGR" "$connection has never-default=yes - blocks internet access!"
-                    send_alert "NETWORKMANAGER_CRITICAL" "WAN-Primary misconfigured!" "Connection needs never-default=no" &
+                    rg_alert "NETWORKMANAGER_CRITICAL" "WAN-Primary misconfigured!" "Connection needs never-default=no"
 
                     # Auto-repair never-default issue
                     log_message "INFO" "NETMGR" "Auto-repairing never-default configuration..."
@@ -803,7 +809,7 @@ check_networkmanager_configuration() {
             "$LTE_CONNECTION")
                 if [[ "$never_default" != "yes" ]]; then
                     log_message "WARNING" "NETMGR" "$connection should have never-default=yes to prevent auto-routes"
-                    send_alert "NETWORKMANAGER_WARNING" "LTE connection config issue" "Should have never-default=yes" &
+                    rg_alert "NETWORKMANAGER_WARNING" "LTE connection config issue" "Should have never-default=yes"
 
                     # Auto-repair LTE never-default
                     log_message "INFO" "NETMGR" "Auto-repairing LTE never-default configuration..."
@@ -828,11 +834,11 @@ check_networkmanager_configuration() {
             # Auto-repair NM metric to match active_wan state (v3.6.0: was warning-only)
             if nmcli connection modify "$connection" ipv4.route-metric "$expected_metric" 2>/dev/null; then
                 log_message "SUCCESS" "NETMGR" "Auto-repaired $connection metric: $route_metric -> $expected_metric"
-                send_alert "ROUTE_METRIC_REPAIRED" "NM metric corrected" "Connection: $connection, Was: $route_metric, Now: $expected_metric" &
+                rg_alert "ROUTE_METRIC_REPAIRED" "NM metric corrected" "Connection: $connection, Was: $route_metric, Now: $expected_metric"
                 increment_success_count
             else
                 log_message "ERROR" "NETMGR" "Failed to auto-repair $connection metric"
-                send_alert "ROUTE_METRIC_WARNING" "NM metric repair failed" "Connection: $connection, Got: $route_metric, Expected: $expected_metric" &
+                rg_alert "ROUTE_METRIC_WARNING" "NM metric repair failed" "Connection: $connection, Got: $route_metric, Expected: $expected_metric"
                 increment_failure_count
             fi
         else
@@ -942,13 +948,13 @@ cleanup_conflicting_routes() {
                     log_message "INFO" "CLEANUP" "Route lock busy (failover in progress) - skipping metric cleanup"
                 elif [[ $del_ok -eq 0 ]]; then
                     log_message "SUCCESS" "CLEANUP" "Removed incorrect LTE route: $lte_route_found"
-                    send_alert "ROUTE_CLEANUP" "✅ Metric conflict resolved" "Removed LTE ($LTE_INTERFACE) route with wrong metric 100" &
+                    rg_alert "ROUTE_CLEANUP" "✅ Metric conflict resolved" "Removed LTE ($LTE_INTERFACE) route with wrong metric 100"
                     increment_success_count
 
                     if [[ $gw_reachable -eq 0 ]]; then
                         if [[ $add_ok -eq 0 ]]; then
                             log_message "SUCCESS" "CLEANUP" "Re-added LTE route with correct metric 200"
-                            send_alert "ROUTE_RECOVERED" "✅ LTE ($LTE_INTERFACE) route corrected" "Metric: 100 → 200" &
+                            rg_alert "ROUTE_RECOVERED" "✅ LTE ($LTE_INTERFACE) route corrected" "Metric: 100 → 200"
                         else
                             log_message "WARNING" "CLEANUP" "Failed to re-add LTE route with metric 200"
                         fi
@@ -964,13 +970,13 @@ cleanup_conflicting_routes() {
             # These are correct metrics - investigate why we have duplicates
             log_message "WARNING" "CLEANUP" "Conflict in expected metric range ($metric) - manual investigation needed"
             log_message "INFO" "CLEANUP" "Routes: $route1 | $route2"
-            send_alert "ROUTE_CONFLICT_MANUAL" "⚠️ Manual route conflict" "Metric $metric has duplicates - check manually" &
+            rg_alert "ROUTE_CONFLICT_MANUAL" "⚠️ Manual route conflict" "Metric $metric has duplicates - check manually"
             ;;
 
         *)
             # Unknown metric conflict
             log_message "WARNING" "CLEANUP" "Unknown metric conflict ($metric) - logging for analysis"
-            send_alert "ROUTE_CONFLICT_UNKNOWN" "❓ Unknown metric conflict" "Metric: $metric needs investigation" &
+            rg_alert "ROUTE_CONFLICT_UNKNOWN" "❓ Unknown metric conflict" "Metric: $metric needs investigation"
             ;;
     esac
     return 0
@@ -1034,10 +1040,10 @@ cleanup_interface_duplicate_routes() {
                 if [[ $del_ok -eq 0 ]]; then
                     log_message "SUCCESS" "CLEANUP" "Removed duplicate route: $route"
                     if [[ -n "$metric" ]]; then
-                        send_alert "ROUTE_CLEANUP" "✅ Duplicate route removed" "Interface: $interface
-Removed: metric $metric" &
+                        rg_alert "ROUTE_CLEANUP" "✅ Duplicate route removed" "Interface: $interface
+Removed: metric $metric"
                     else
-                        send_alert "ROUTE_CLEANUP" "✅ Duplicate route removed" "Interface: $interface" &
+                        rg_alert "ROUTE_CLEANUP" "✅ Duplicate route removed" "Interface: $interface"
                     fi
                 fi
             fi
@@ -1134,7 +1140,7 @@ check_lte_recovery() {
         write_lte_state "true"
 
         # Send recovery notification
-        send_alert "LTE_RECOVERED" \
+        rg_alert "LTE_RECOVERED" \
             "✅ Route Guardian: LTE Recovered" \
             "LTE modem ($LTE_INTERFACE) is now available
 
@@ -1143,7 +1149,7 @@ Resuming full dual-WAN monitoring.
 Interface details:
 \`\`\`
 $(ip addr show "$LTE_INTERFACE" 2>/dev/null || echo "Interface up but no IP yet")
-\`\`\`" &
+\`\`\`"
 
         return 0
     fi
@@ -1158,11 +1164,11 @@ $(ip addr show "$LTE_INTERFACE" 2>/dev/null || echo "Interface up but no IP yet"
             LTE_AVAILABLE=true
             write_lte_state "true"
 
-            send_alert "LTE_RECOVERED" \
+            rg_alert "LTE_RECOVERED" \
                 "✅ Route Guardian: LTE Activated" \
                 "LTE modem activated via NetworkManager connection '$LTE_CONNECTION'
 
-Resuming full dual-WAN monitoring." &
+Resuming full dual-WAN monitoring."
 
             return 0
         else
@@ -1198,8 +1204,9 @@ enhanced_preflight_checks() {
 
     if [[ ! -d "/sys/class/net/$DSL_INTERFACE" ]]; then
         log_message "ERROR" "PREFLIGHT" "Critical DSL interface $DSL_INTERFACE missing after 10s - service cannot function"
-        send_alert "PREFLIGHT_CRITICAL" "🔴 Route Guardian cannot start" \
-            "DSL interface $DSL_INTERFACE missing - this is a hardware failure" &
+        rg_alert "PREFLIGHT_CRITICAL" "🔴 Route Guardian cannot start" \
+            "DSL interface $DSL_INTERFACE missing - this is a hardware failure"
+        wait  # let the background delivery finish before the unit stops
         exit 1  # Hard exit - service cannot function without DSL
     fi
 
@@ -1276,7 +1283,7 @@ enhanced_preflight_checks() {
         write_lte_state "false"
 
         # Send one-time alert about DSL-Only mode
-        send_alert "LTE_MISSING_FALLBACK" \
+        rg_alert "LTE_MISSING_FALLBACK" \
             "⚠️ Route Guardian: DSL-Only Mode" \
             "LTE modem ($LTE_INTERFACE) not detected after 30s
 
@@ -1294,7 +1301,7 @@ To diagnose:
 nmcli device status
 nmcli connection show
 dmesg | grep -i usb | tail -20
-\`\`\`" &
+\`\`\`"
     fi
 
     log_message "INFO" "PREFLIGHT" "Pre-flight checks complete - LTE_AVAILABLE=$LTE_AVAILABLE"
@@ -1354,7 +1361,7 @@ _failover_lock_active() {
             # lockfile_content IS the failover Event-ID → log it as a greppable
             # field (the guardian "span" of the trace).
             log_message "WARNING" "FAILOVER" "Stale lockfile detected (${lock_age}s old, content: $lockfile_content) - removing and resuming [FAILOVER_EVENT_ID=$lockfile_content]"
-            send_alert "STALE_LOCKFILE" "⚠️ Stale failover lockfile removed" "Age: ${lock_age}s, Lockfile: $lockfile_content" &
+            rg_alert "STALE_LOCKFILE" "⚠️ Stale failover lockfile removed" "Age: ${lock_age}s, Lockfile: $lockfile_content"
             rm -f /run/failover-in-progress.lock 2>/dev/null || true
             return 1  # Continue with normal route checks after cleanup
         fi
@@ -1385,9 +1392,11 @@ monitor_default_routes() {
         # REGEX: use ( |$) to avoid "metric 50" matching "metric 500"
         if ip route show | grep -qE "^default via $DSL_GATEWAY dev $DSL_INTERFACE.*metric ${expected_metric}( |$)"; then
             dsl_ok=true
+            # Back without a repair by this guardian (NetworkManager, failback)
+            rg_recovery_alert "DSL_ROUTE_MISSING" "✅ DSL route present again" "Interface: $DSL_INTERFACE, Metric: $expected_metric"
         else
             log_message "WARNING" "DSL" "DSL route missing or wrong metric (expected: $expected_metric, active_wan: $(cat /run/linux-dual-wan-failover/wan-state/active_wan 2>/dev/null))"
-            send_alert "DSL_ROUTE_MISSING" "🔴 DSL (eth0/WAN) route needs repair" "Expected metric: $expected_metric, Interface: $DSL_INTERFACE" &
+            rg_alert "DSL_ROUTE_MISSING" "🔴 DSL (eth0/WAN) route needs repair" "Expected metric: $expected_metric, Interface: $DSL_INTERFACE"
             # Only repair if gateway is reachable
             if test_gateway_reachable "$DSL_GATEWAY" "$DSL_INTERFACE"; then
                 # Delete and re-add must sit in ONE lock region. Otherwise the
@@ -1413,9 +1422,10 @@ monitor_default_routes() {
         if check_interface_status "$LTE_INTERFACE"; then
             if check_route_exists "$LTE_INTERFACE" "$LTE_GATEWAY"; then
                 lte_ok=true
+                rg_recovery_alert "LTE_ROUTE_MISSING" "✅ LTE route present again" "Interface: $LTE_INTERFACE"
             else
                 log_message "WARNING" "LTE" "LTE route missing"
-                send_alert "LTE_ROUTE_MISSING" "🔴 LTE ($LTE_INTERFACE) backup route lost!" "Gateway: $LTE_GATEWAY, Interface: $LTE_INTERFACE" &
+                rg_alert "LTE_ROUTE_MISSING" "🔴 LTE ($LTE_INTERFACE) backup route lost!" "Gateway: $LTE_GATEWAY, Interface: $LTE_INTERFACE"
 
                 # v2.4 NEW: LTE Recovery Logic
                 # Try to diagnose and recover LTE connection before adding route
@@ -1427,7 +1437,7 @@ monitor_default_routes() {
                     lte_conn_state=$(nmcli -t -f STATE connection show "$LTE_CONNECTION" 2>/dev/null | head -1 || echo "unknown")
                     if [[ "$lte_conn_state" != "activated" ]]; then
                         log_message "INFO" "LTE" "LTE connection not activated - triggering connection restart"
-                        send_alert "LTE_CONNECTION_RESTART" "🔄 LTE Connection Restart" "Connection: $LTE_CONNECTION was inactive, restarting..." &
+                        rg_alert "LTE_CONNECTION_RESTART" "🔄 LTE Connection Restart" "Connection: $LTE_CONNECTION was inactive, restarting..."
 
                         # Restart LTE connection
                         nmcli connection down "$LTE_CONNECTION" 2>/dev/null || true
@@ -1439,8 +1449,7 @@ monitor_default_routes() {
                         if test_gateway_reachable "$LTE_GATEWAY" "$LTE_INTERFACE"; then
                             log_message "SUCCESS" "LTE" "LTE Gateway recovered after connection restart"
 
-                            # v3.1.0: Use smart recovery alert
-                            send_recovery_alert "LTE_CONNECTION_RESTART" "✅ LTE Connection recovered" "Gateway: $LTE_GATEWAY now reachable"
+                            rg_recovery_alert "LTE_CONNECTION_RESTART" "✅ LTE Connection recovered" "Gateway: $LTE_GATEWAY now reachable"
                         fi
                     fi
 
@@ -1484,22 +1493,22 @@ monitor_default_routes() {
            && check_interface_status "$LTE_INTERFACE" \
            && test_gateway_reachable "$LTE_GATEWAY" "$LTE_INTERFACE"; then
             log_message "WARNING" "VACUUM" "Emergency restore: default via $LTE_GATEWAY dev $LTE_INTERFACE metric 200"
-            send_alert "ROUTE_VACUUM_RECOVERED" \
+            rg_alert "ROUTE_VACUUM_RECOVERED" \
                 "🚨 Routing vacuum recovered via backup" \
-                "No default route in main table. $LTE_INTERFACE functional → default via $LTE_GATEWAY dev $LTE_INTERFACE restored." &
+                "No default route in main table. $LTE_INTERFACE functional → default via $LTE_GATEWAY dev $LTE_INTERFACE restored."
             add_missing_route "$LTE_INTERFACE" "$LTE_GATEWAY" 200
         elif check_interface_status "$DSL_INTERFACE" \
              && test_gateway_reachable "$DSL_GATEWAY" "$DSL_INTERFACE"; then
             log_message "WARNING" "VACUUM" "Emergency restore: default via $DSL_GATEWAY dev $DSL_INTERFACE metric 50"
-            send_alert "ROUTE_VACUUM_RECOVERED" \
+            rg_alert "ROUTE_VACUUM_RECOVERED" \
                 "🚨 Routing vacuum recovered via primary" \
-                "No default route in main table. $DSL_INTERFACE functional → default via $DSL_GATEWAY dev $DSL_INTERFACE restored." &
+                "No default route in main table. $DSL_INTERFACE functional → default via $DSL_GATEWAY dev $DSL_INTERFACE restored."
             add_missing_route "$DSL_INTERFACE" "$DSL_GATEWAY" 50
         else
             log_message "CRITICAL" "VACUUM" "Routing vacuum + no functional WAN — manual intervention required"
-            send_alert "ROUTE_VACUUM_CRITICAL" \
+            rg_alert "ROUTE_VACUUM_CRITICAL" \
                 "🚨 Routing vacuum + no functional WAN" \
-                "No default route, neither $DSL_INTERFACE nor $LTE_INTERFACE reachable — manual intervention required!" &
+                "No default route, neither $DSL_INTERFACE nor $LTE_INTERFACE reachable — manual intervention required!"
         fi
     fi
 
@@ -1784,9 +1793,6 @@ case "${1:-monitor}" in
             fi
 
             comprehensive_route_health_check
-
-            # v3.1.0: Check pending smart alerts (process grace period events)
-            sa_check_pending_events "_send_alert_direct"
 
             # Prüfe ob Script geändert wurde — exit 0 triggert systemd Restart
             script_watch_check "$_rg_iteration"

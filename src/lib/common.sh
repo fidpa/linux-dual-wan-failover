@@ -136,7 +136,9 @@ if ! declare -F log_info &>/dev/null; then
     log_info()    { printf '%s [INFO] %s\n'    "$(date -u +%FT%TZ)" "$*" >&2; }
     log_warning() { printf '%s [WARN] %s\n'    "$(date -u +%FT%TZ)" "$*" >&2; }
     log_error()   { printf '%s [ERROR] %s\n'   "$(date -u +%FT%TZ)" "$*" >&2; }
-    log_debug()   { [[ "${DEBUG:-0}" == 1 ]] && printf '%s [DEBUG] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
+    # Status 0 also when DEBUG is off: `[[ ]] && printf` returned 1 there,
+    # which ended set -e callers and turned `log_debug ... || x` into x.
+    log_debug()   { [[ "${DEBUG:-0}" == 1 ]] || return 0; printf '%s [DEBUG] %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 fi
 
 # The services also call levels and structured variants that only the toolkit
@@ -167,6 +169,34 @@ if ! declare -F log_error_structured &>/dev/null; then
 fi
 if ! declare -F log_critical_structured &>/dev/null; then
     log_critical_structured() { _log_structured_fallback CRITICAL "$@"; }
+fi
+
+# ============================================================================
+# ATOMIC FILE WRITES
+# ============================================================================
+#
+# sfu_write_file CONTENT TARGET [MODE] comes from the toolkit's
+# secure-file-utils.sh (logging.sh loads it when it sits next to it). Without
+# the toolkit a minimal local version takes its place. Until v0.11.0 that
+# fallback lived in routing.sh, which only failover-monitor loads: without the
+# toolkit, route-guardian had no sfu_write_file at all, so its preventive-alert
+# cooldown, repair counters and LTE state file were never written.
+if [[ -n "${TOOLKIT_LIB:-}" && -f "${TOOLKIT_LIB}/secure-file-utils.sh" ]] \
+        && ! declare -F sfu_write_file >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    source "${TOOLKIT_LIB}/secure-file-utils.sh"
+fi
+if ! declare -F sfu_write_file >/dev/null 2>&1; then
+    # Atomic write via mktemp + install. No locking.
+    sfu_write_file() {
+        local content="$1"
+        local target="$2"
+        local mode="${3:-644}"
+        local tmp
+        tmp="$(mktemp "${target}.XXXXXX")" || return 1
+        printf '%s' "$content" > "$tmp" || { rm -f "$tmp"; return 1; }
+        install -m "$mode" "$tmp" "$target" && rm -f "$tmp"
+    }
 fi
 
 # ============================================================================
