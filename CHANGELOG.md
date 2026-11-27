@@ -5,6 +5,49 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-11-27: Manual failback no longer waits out the automatic cooldown
+
+After a manual failback the primary WAN link dropped again about a minute
+later, and the daemon switched to the backup on its own. That automatic path
+back to the backup has no cooldown. Shortly afterwards the primary was fully
+healthy again and the backup almost unusable (DNS lookups close to 1 s), yet
+the 600 s `ANTI_FLAPPING_DELAY` rejected three manual failback attempts, and
+the router stayed on the backup for 39 minutes. The long cooldown locked out
+only the operator.
+
+### Changed
+
+- **Manual failback and force-failover from the Web-UI wait 60 s after the
+  last switch instead of 600 s.** `perform_failover()` in
+  `src/services/failover-monitor.sh` gives `manual_failback` and
+  `manual_failover_force` their own branch with the new
+  `MANUAL_ACTION_COOLDOWN` (default 60) and logs a suppressed request as
+  "suppressed by manual-action cooldown". The automatic `failback` keeps
+  `ANTI_FLAPPING_DELAY` (600 s). The 60 s catch a click right after a switch;
+  repeated clicks are still capped by the Web-UI rate limit (one failback per
+  60 s, one force-failover per 120 s per source IP).
+
+- **The Web-UI's cooldown pre-check uses the same value as the daemon.**
+  `_anti_flapping_remaining_seconds()` in `src/web/app.py` reads
+  `MANUAL_ACTION_COOLDOWN` instead of `ANTI_FLAPPING_DELAY`, so the HTTP 409
+  "cooldown" answer of `/api/failback` and `/api/force-failover` reports the
+  remaining seconds of the 60 s window. `config/failover.conf.example`,
+  `config/examples/dual-wan-dsl-lte.conf` and the docs name both cooldowns
+  separately.
+
+### Upgrade notes
+
+- **Manual actions switch after 60 s on every install that does not set the
+  new variable.** `install.sh` keeps an existing `failover.conf`, so the
+  variable is absent after the update, and both the daemon and the Web-UI fall
+  back to the default of 60 s. To keep the previous behaviour, add
+  `MANUAL_ACTION_COOLDOWN=600` to `failover.conf` by hand. The Web-UI config
+  editor does not list the variable, so it cannot be set from the dashboard.
+- **Log filters need the new message.** A suppressed manual action now logs
+  `manual_failback suppressed by manual-action cooldown` (or
+  `manual_failover_force ...`) instead of `Failback suppressed by
+  anti-flapping`. The automatic failback keeps the old message.
+
 ## [0.12.0] - 2026-10-03: route-guardian alerts reach the alerting plugin
 
 Following up on the v0.11.0 findings showed that `route-guardian` had never
@@ -1629,7 +1672,8 @@ has been running in production since August 2025.
   `ping`.
 - **CI:** shellcheck, bashate, bats, ruff.
 
-[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/fidpa/linux-dual-wan-failover/compare/v0.10.0...v0.10.1

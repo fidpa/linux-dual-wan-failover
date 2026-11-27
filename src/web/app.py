@@ -67,7 +67,12 @@ def _configure_logging(app: Flask) -> None:
 
 
 def _anti_flapping_remaining_seconds() -> int:
-    """Seconds left on the daemon's anti-flapping cooldown; 0 when clear.
+    """Seconds left on the daemon's manual-action cooldown; 0 when clear.
+
+    Manual actions wait MANUAL_ACTION_COOLDOWN (60s), not ANTI_FLAPPING_DELAY
+    (600s), which only gates the automatic failback. The longer delay blocked
+    manual failbacks to a healthy primary for the full ten minutes after the
+    daemon had switched to the backup on its own.
 
     The daemon accepts a manual action, then drops it inside perform_failover
     with "suppressed by anti-flapping" — journal-only, while the API had
@@ -89,7 +94,7 @@ def _anti_flapping_remaining_seconds() -> int:
         last_failover = int(config.LAST_FAILOVER_FILE.read_text(encoding="utf-8").strip())
     except (FileNotFoundError, PermissionError, OSError, ValueError):
         return 0
-    delay = config_reader.effective_int("ANTI_FLAPPING_DELAY", 600)
+    delay = config_reader.effective_int("MANUAL_ACTION_COOLDOWN", 60)
     elapsed = int(time.time()) - last_failover
     if elapsed < 0:  # clock skew — treat as "just happened", full cooldown
         return delay

@@ -177,7 +177,8 @@ Response (anti-flapping cooldown active): HTTP 409.
 }
 ```
 
-The daemon enforces `ANTI_FLAPPING_DELAY` on manual actions too, and a
+The daemon enforces `MANUAL_ACTION_COOLDOWN` (60 s by default) on manual
+actions, not the 600 s `ANTI_FLAPPING_DELAY` of the automatic failback, and a
 suppressed request is dropped with a journal line only. Without this
 pre-check the API answered 202 "submitted" for a request that was
 guaranteed to be discarded, which reads to the operator as a dead button.

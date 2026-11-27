@@ -52,12 +52,30 @@ Even if the thresholds-and-counters say "switch again", the cooldowns say
 "wait":
 
 ```
-ANTI_FLAPPING_DELAY         = 600 s  (10 min; failback + manual actions only — score-based failover has no cooldown)
+ANTI_FLAPPING_DELAY         = 600 s  (10 min; automatic failback only, score-based failover has no cooldown)
+MANUAL_ACTION_COOLDOWN      = 60 s   (1 min; manual failback and force-failover from the Web-UI)
 EMERGENCY_FAILBACK_COOLDOWN = 3600 s (60 min after an emergency failback)
 ```
 
-These bound the worst-case flap rate. Even adversarial traffic can't
-ping-pong faster than ~6 switches/hour.
+These bound the worst-case automatic flap rate. Even adversarial traffic
+can't make the daemon fail back more often than ~6 times per hour.
+
+### Manual actions get a short cooldown of their own
+
+If manual actions from the Web-UI waited the full `ANTI_FLAPPING_DELAY`,
+the cooldown would lock out the operator, not the flapping. A field case:
+after a manual failback the primary dropped again about a minute
+later, and the daemon switched back to the backup on its own. That path
+(emergency, critical packet loss) has no cooldown. A few minutes later the
+primary was fully healthy and the backup almost unusable (DNS lookups close
+to 1 s), yet the 600 s cooldown rejected three manual failback attempts, and
+the router stayed on the backup for 39 minutes.
+
+A manual action is a deliberate decision by someone looking at the
+dashboard, so it waits only `MANUAL_ACTION_COOLDOWN` (60 s). That still
+catches a click right after a switch. Repeated clicks are capped by the
+Web-UI rate limit per source IP: one failback per 60 s, one force-failover
+per 120 s.
 
 ### A cooldown that never fires is not a cooldown
 
@@ -65,7 +83,7 @@ ping-pong faster than ~6 switches/hour.
 start, and `get_monotonic_time()` reads `/proc/uptime`. Subtracting the two
 without a guard means the daemon computes `uptime - 0` when no failover has
 happened yet. On a host that has been up for days that is a harmlessly large
-number; within the first `ANTI_FLAPPING_DELAY` seconds after a **reboot** it
+number; within the first cooldown seconds after a **reboot** it
 suppresses every failback and every manual action, logging a confident
 "last failover was 47s ago" for a failover that never occurred.
 

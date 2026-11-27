@@ -102,7 +102,7 @@ process_manual_action_request()  ← src/services/failover-monitor.sh
         v
 perform_failover(BACKUP, PRIMARY, "manual_failback")
         |
-        | Anti-flapping (ANTI_FLAPPING_DELAY) for failback + manual_* reasons
+        | Cooldown: MANUAL_ACTION_COOLDOWN (60 s) for manual_* reasons
         | safe_route_change → metric swap → routing.sh::execute_route_change
         v
 active_wan = primary  →  state file updated

@@ -166,15 +166,15 @@ def test_failback_during_anti_flapping_cooldown_returns_409_without_writing(
     """
     _backup_state(fixtures_dir)
     sent = _patch_alerts(monkeypatch)
-    # Failover 100s ago, ANTI_FLAPPING_DELAY=600 → 500s left.
-    (fixtures_dir / "wan-state" / "last_failover").write_text(str(int(time.time()) - 100))
-    (fixtures_dir / "failover.conf").write_text("ANTI_FLAPPING_DELAY=600\n")
+    # Failover 20s ago, MANUAL_ACTION_COOLDOWN=60 → 40s left.
+    (fixtures_dir / "wan-state" / "last_failover").write_text(str(int(time.time()) - 20))
+    (fixtures_dir / "failover.conf").write_text("MANUAL_ACTION_COOLDOWN=60\n")
 
     resp = _csrf_post(client, "/api/failback")
     assert resp.status_code == 409
     body = resp.get_json()
     assert body["status"] == "cooldown"
-    assert 480 <= body["remaining_seconds"] <= 500
+    assert 35 <= body["remaining_seconds"] <= 40
 
     assert not (fixtures_dir / "wan-state" / "manual_action.json").exists()
     assert sent == []
@@ -185,7 +185,22 @@ def test_failback_after_cooldown_expired_returns_202(client, fixtures_dir, monke
     _backup_state(fixtures_dir)
     _patch_alerts(monkeypatch)
     (fixtures_dir / "wan-state" / "last_failover").write_text(str(int(time.time()) - 900))
-    (fixtures_dir / "failover.conf").write_text("ANTI_FLAPPING_DELAY=600\n")
+    (fixtures_dir / "failover.conf").write_text("MANUAL_ACTION_COOLDOWN=60\n")
+
+    resp = _csrf_post(client, "/api/failback")
+    assert resp.status_code == 202
+    assert resp.get_json()["status"] == "submitted"
+
+
+def test_failback_ignores_anti_flapping_delay(client, fixtures_dir, monkeypatch):
+    """A failback 160s after an automatic failover must not wait for the 600s
+    ANTI_FLAPPING_DELAY. Manual actions only wait MANUAL_ACTION_COOLDOWN."""
+    _backup_state(fixtures_dir)
+    _patch_alerts(monkeypatch)
+    (fixtures_dir / "wan-state" / "last_failover").write_text(str(int(time.time()) - 160))
+    (fixtures_dir / "failover.conf").write_text(
+        "ANTI_FLAPPING_DELAY=600\nMANUAL_ACTION_COOLDOWN=60\n"
+    )
 
     resp = _csrf_post(client, "/api/failback")
     assert resp.status_code == 202

@@ -18,7 +18,7 @@ high-level index.
 | WAN quality probe | `WAN_QUALITY_TARGET_MODE`, `WAN_QUALITY_PROBE_SAMPLES`, `WAN_QUALITY_PROM_MAX_AGE` | no (default: `internet`, 10 samples, 300 s) |
 | Timing | `CHECK_INTERVAL`, `ROUTE_GUARDIAN_CHECK_INTERVAL` | no (sane defaults) |
 | Hysteresis | `FAILOVER_THRESHOLD_DOWN`, `FAILURE_THRESHOLD`, `RECOVERY_THRESHOLD`, `EMERGENCY_THRESHOLD` | no (sane defaults) |
-| Cooldowns | `ANTI_FLAPPING_DELAY`, `EMERGENCY_FAILBACK_COOLDOWN` | no (sane defaults) |
+| Cooldowns | `ANTI_FLAPPING_DELAY`, `MANUAL_ACTION_COOLDOWN`, `EMERGENCY_FAILBACK_COOLDOWN` | no (sane defaults: 600 s automatic failback, 60 s manual Web-UI actions, 3600 s after an emergency failback) |
 | Emergency failback | `EMERGENCY_FAILBACK_MIN_BACKUP_TIME`, `EMERGENCY_FAILBACK_DEGRADED_CHECKS`, `EMERGENCY_FAILBACK_DNS_THRESHOLD_MS` | no — but read the note below before lowering any of them |
 | Failback gating | `MIN_FAILBACK_SCORE`, `MIN_BACKUP_TIME`, `MIN_STABLE_DURATION`, `STABILITY_RESET_THRESHOLD` | no (sane defaults) |
 | Latency / loss | `DSL_LATENCY_*`, `LTE_LATENCY_*`, `PACKET_LOSS_*` | no (sane defaults) |

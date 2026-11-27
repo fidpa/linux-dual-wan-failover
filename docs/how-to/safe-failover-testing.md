@@ -189,8 +189,9 @@ ip route show | grep '^default'
 #   default via <BACKUP_GW>  dev lte0 metric 200
 ```
 
-Note that a manual failback is subject to `ANTI_FLAPPING_DELAY` (600 s by
-default), the same cooldown that applies to an automatic one.
+Note that a manual failback from the Web-UI is subject to
+`MANUAL_ACTION_COOLDOWN` (60 s by default) after the last switch. The
+automatic failback waits `ANTI_FLAPPING_DELAY` (600 s by default).
 
 ## What if it didn't fail over?
 

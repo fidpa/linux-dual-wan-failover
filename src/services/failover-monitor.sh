@@ -142,6 +142,12 @@ FAILOVER_THRESHOLD_DOWN="${FAILOVER_THRESHOLD_DOWN:-60}"
 # Anti-flapping protection (synchronized with failover.conf)
 ANTI_FLAPPING_DELAY="${ANTI_FLAPPING_DELAY:-600}"  # 10 minutes between failovers
 ANTI_FLAPPING_DELAY_INSTANT="${ANTI_FLAPPING_DELAY_INSTANT:-60}"  # 60s for instant_event (v4.1.1 #4)
+# Manual actions from the Web-UI (manual_failback, manual_failover_force) are a
+# deliberate operator decision. The full ANTI_FLAPPING_DELAY only locked the
+# operator out: the automatic path back to the backup (emergency, critical
+# packet loss) has no cooldown anyway. 60 s catch a click right after a switch;
+# the Web-UI rate limit covers repeated clicks.
+MANUAL_ACTION_COOLDOWN="${MANUAL_ACTION_COOLDOWN:-60}"
 
 # v4.4.0: Minimum time on backup WAN after failover
 MIN_BACKUP_TIME="${MIN_BACKUP_TIME:-3600}"  # 60 minutes in seconds (default: 3600s = 60min)
@@ -699,7 +705,7 @@ process_instant_failover_request() {
 # Reads ``MANUAL_ACTION_FILE`` (written atomically by failover-web), validates
 # payload, enforces freshness (≤30 s) and idempotency (request_id), then
 # dispatches to ``perform_failover`` with a ``manual_*`` reason that bypasses
-# the score-based decision constraints but still respects ANTI_FLAPPING_DELAY.
+# the score-based decision constraints but still respects MANUAL_ACTION_COOLDOWN.
 #
 # Wire format::
 #
@@ -902,20 +908,29 @@ Status: nft list table inet ldwf_quota_block" \
     # v4.6.1 FIX M3: Using monotonic clock (NTP clock skew cannot bypass or freeze cooldowns)
     local mono_now
     mono_now=$(get_monotonic_time)
-    if [[ "$reason" == "failback" || "$reason" == "manual_failback" || "$reason" == "manual_failover_force" ]]; then
-        # CRITICAL: Failback must ALWAYS respect full cooldown (recovery isn't an emergency).
-        # Manual web triggers are included: they must not enable rapid oscillation any
-        # more than auto-failback would. The shipped config documents the cooldown as
-        # covering "failback + manual actions" — before this the code only matched
-        # "failback", so manual_failback/manual_failover_force bypassed it entirely.
-        #
-        # last_failover_mono=0 means "no failover since daemon start", NOT "failover at
-        # uptime 0". get_monotonic_time() reads /proc/uptime, so the bare subtraction
-        # evaluated uptime-0. On a long-running host that is harmlessly large; within
-        # the first ANTI_FLAPPING_DELAY seconds after a REBOOT it suppressed every
-        # failback and every manual action, logging a misleading "last failover was Ns
-        # ago" for a failover that never happened. Guard mirrors the one already used
-        # for last_emergency_failback_mono.
+    # last_failover_mono=0 means "no failover since daemon start", NOT "failover at
+    # uptime 0". get_monotonic_time() reads /proc/uptime, so the bare subtraction
+    # evaluated uptime-0. On a long-running host that is harmlessly large; within
+    # the first cooldown seconds after a REBOOT it suppressed every failback and
+    # every manual action, logging a misleading "last failover was Ns ago" for a
+    # failover that never happened. The guard in each branch below mirrors the one
+    # already used for last_emergency_failback_mono.
+    if [[ "$reason" == "manual_failback" || "$reason" == "manual_failover_force" ]]; then
+        # Manual web triggers wait MANUAL_ACTION_COOLDOWN, not ANTI_FLAPPING_DELAY.
+        # After a manual failback the primary failed again, the daemon switched
+        # back to the backup without any cooldown, and the 600 s delay then
+        # rejected every manual failback while the primary was healthy again.
+        local time_since_last
+        time_since_last=$((mono_now - last_failover_mono))
+        if [[ $last_failover_mono -gt 0 ]] && [[ $time_since_last -lt $MANUAL_ACTION_COOLDOWN ]]; then
+            local remaining
+            remaining=$((MANUAL_ACTION_COOLDOWN - time_since_last))
+            log_warning "${reason} suppressed by manual-action cooldown (${remaining}s remaining of ${MANUAL_ACTION_COOLDOWN}s, last failover was ${time_since_last}s ago)"
+            return 0  # Cooldown is not an error - return success to prevent service crash
+        fi
+    elif [[ "$reason" == "failback" ]]; then
+        # CRITICAL: automatic failback must ALWAYS respect the full cooldown
+        # (recovery isn't an emergency).
         local time_since_last
         time_since_last=$((mono_now - last_failover_mono))
         if [[ $last_failover_mono -gt 0 ]] && [[ $time_since_last -lt $ANTI_FLAPPING_DELAY ]]; then

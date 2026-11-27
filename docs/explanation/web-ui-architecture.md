@@ -73,7 +73,7 @@ laziness — it is a recognition of what the threat model actually is:
   entry and an alerting-plugin dispatch. A successful intrusion paints
   itself across both layers.
 - **Daemon anti-flapping.** Even with all else bypassed, the daemon's
-  `ANTI_FLAPPING_DELAY` cooldown limits how fast manual actions can
+  `MANUAL_ACTION_COOLDOWN` (60 s) limits how fast manual actions can
   oscillate the routing table.
 
 The result is defence-in-depth that fits the deployment shape (homelab
