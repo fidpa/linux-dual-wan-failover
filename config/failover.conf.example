@@ -44,9 +44,8 @@ MGMT_INTERFACE=
 
 PRIMARY_METRIC_NORMAL=50
 PRIMARY_METRIC_DEMOTED=500
-BACKUP_METRIC=200
-
 # Optional explicit gateway overrides. Most setups leave these unset and let
+BACKUP_METRIC=200
 # the failover stack auto-detect from `ip route` per-interface.
 PRIMARY_GATEWAY=
 BACKUP_GATEWAY=
@@ -74,9 +73,8 @@ WAN_QUALITY_TARGET_MODE=internet
 
 # ICMP samples per measurement series. Latency, loss and jitter all come from
 # this single series, so they describe the same moment.
-WAN_QUALITY_PROBE_SAMPLES=10
-
 # DNS servers used for the DNS test (independent of `/etc/resolv.conf`).
+WAN_QUALITY_PROBE_SAMPLES=10
 DNS_SERVERS=("8.8.8.8" "1.1.1.1")
 
 # Domains to resolve in the DNS test. Should be names whose downtime is
@@ -100,50 +98,55 @@ DNS_TEST_METHOD=doh
 # Timing
 # ============================================================================
 
-CHECK_INTERVAL=15                 # seconds between scoring rounds
-ROUTE_GUARDIAN_CHECK_INTERVAL=10  # seconds between route enforcement passes
-
+# seconds between scoring rounds
+CHECK_INTERVAL=15
+# seconds between route enforcement passes
+ROUTE_GUARDIAN_CHECK_INTERVAL=10
 # ============================================================================
 # Hysteresis & anti-flap
 # ============================================================================
 
 # A score-based failover fires only when the primary stays below
 # FAILOVER_THRESHOLD_DOWN for FAILURE_THRESHOLD consecutive checks.
-FAILOVER_THRESHOLD_DOWN=60
-
 # NOTE: FAILOVER_THRESHOLD_UP and HYSTERESIS_GAP are NOT evaluated by the
+FAILOVER_THRESHOLD_DOWN=60
 # daemon. Failback is governed by MIN_FAILBACK_SCORE + MIN_BACKUP_TIME +
 # MIN_STABLE_DURATION (see the failback section below). The variables remain
 # here, commented out, as documentation of the original hysteresis design.
 # FAILOVER_THRESHOLD_UP=80   # UNUSED — failback via MIN_FAILBACK_SCORE
 # HYSTERESIS_GAP=20          # UNUSED — hysteresis path was dead code, removed
 
-FAILURE_THRESHOLD=5    # CHECK_INTERVAL × FAILURE_THRESHOLD = ~75 s tolerance
-RECOVERY_THRESHOLD=20  # CHECK_INTERVAL × RECOVERY_THRESHOLD = ~5 min stability
-
+# CHECK_INTERVAL × FAILURE_THRESHOLD = ~75 s tolerance
+FAILURE_THRESHOLD=5
+# CHECK_INTERVAL × RECOVERY_THRESHOLD = ~5 min stability
+RECOVERY_THRESHOLD=20
 # Emergency override — score below this triggers immediate failover, ignoring
 # the consecutive-check counter. Use sparingly; lower values are safer.
-EMERGENCY_THRESHOLD=15
-
 # Cooldowns (seconds) prevent ping-pong between primary and backup.
-ANTI_FLAPPING_DELAY=600           # 10 min cooldown for automatic failback (score-based failover has no cooldown)
-EMERGENCY_FAILBACK_COOLDOWN=3600  # 60 min cooldown for emergency failback
+EMERGENCY_THRESHOLD=15
+# 10 min cooldown for automatic failback (score-based failover has no cooldown)
+ANTI_FLAPPING_DELAY=600
+# 60 min cooldown for emergency failback
+EMERGENCY_FAILBACK_COOLDOWN=3600
 # Cooldown for manual Web-UI actions (failback, force-failover), used instead of
 # ANTI_FLAPPING_DELAY. The automatic path back to the backup has no cooldown,
 # so a long delay here only locks the operator out of a healthy primary.
-MANUAL_ACTION_COOLDOWN=60
-
 # Emergency failback — the escape hatch for "backup is up but unusable".
+MANUAL_ACTION_COOLDOWN=60
 # Deliberately hard to trigger: it bypasses MIN_BACKUP_TIME/MIN_STABLE_DURATION,
 # so a trigger-happy setting turns it into the normal failback path. Field
 # experience: with a 600 s floor and a 900 s cooldown on a flapping primary,
 # every cycle ended exactly at the floor and the system kept returning to a
 # link that was still broken. Raise the floor rather than the DNS threshold —
 # a backup that is merely slow is still carrying traffic.
-EMERGENCY_FAILBACK_DNS_THRESHOLD_MS=800  # backup DNS time above which it counts as degraded
-EMERGENCY_FAILBACK_DEGRADED_CHECKS=6     # consecutive FRESH readings required (see note below)
-EMERGENCY_FAILBACK_MIN_PRIMARY_SCORE=60  # primary must be at least this healthy
-EMERGENCY_FAILBACK_MIN_BACKUP_TIME=1800  # 30 min on backup before the escape hatch opens
+# backup DNS time above which it counts as degraded
+EMERGENCY_FAILBACK_DNS_THRESHOLD_MS=800
+# consecutive FRESH readings required (see note below)
+EMERGENCY_FAILBACK_DEGRADED_CHECKS=6
+# primary must be at least this healthy
+EMERGENCY_FAILBACK_MIN_PRIMARY_SCORE=60
+# 30 min on backup before the escape hatch opens
+EMERGENCY_FAILBACK_MIN_BACKUP_TIME=1800
 #
 # NOTE on DEGRADED_CHECKS: this now counts readings, not rounds. The orchestrator
 # ticks once per CHECK_INTERVAL, but the DNS value it reads is refreshed by
@@ -158,10 +161,14 @@ EMERGENCY_FAILBACK_MIN_BACKUP_TIME=1800  # 30 min on backup before the escape ha
 # Failback gating
 # ============================================================================
 
-MIN_FAILBACK_SCORE=60        # primary must reach this before failback is even considered
-MIN_BACKUP_TIME=3600         # seconds we MUST stay on backup after failover (1 h)
-MIN_STABLE_DURATION=900      # primary must stay healthy for this long (15 min)
-STABILITY_RESET_THRESHOLD=50 # log-only: controls whether the window-reset warning
+# primary must reach this before failback is even considered
+MIN_FAILBACK_SCORE=60
+# seconds we MUST stay on backup after failover (1 h)
+MIN_BACKUP_TIME=3600
+# primary must stay healthy for this long (15 min)
+MIN_STABLE_DURATION=900
+# log-only: controls whether the window-reset warning
+STABILITY_RESET_THRESHOLD=50
                              # is emitted. It does NOT change failback timing — any
                              # score below FAILOVER_THRESHOLD_DOWN restarts the
                              # window. Raise MIN_STABLE_DURATION instead.
@@ -174,21 +181,18 @@ STABILITY_RESET_THRESHOLD=50 # log-only: controls whether the window-reset warni
 DSL_LATENCY_EXCELLENT=15
 DSL_LATENCY_GOOD=50
 DSL_LATENCY_WARNING=100
-DSL_LATENCY_CRITICAL=200
-
 # Cellular (LTE / 4G / 5G). Cellular has higher physics-floor latency, so the
+DSL_LATENCY_CRITICAL=200
 # thresholds are relaxed.
 LTE_LATENCY_EXCELLENT=40
 LTE_LATENCY_GOOD=80
 LTE_LATENCY_WARNING=150
-LTE_LATENCY_CRITICAL=300
-
 # Packet-loss percentages.
+LTE_LATENCY_CRITICAL=300
 PACKET_LOSS_GOOD=5
 PACKET_LOSS_WARNING=10
-PACKET_LOSS_CRITICAL=20
-
 # ============================================================================
+PACKET_LOSS_CRITICAL=20
 # Plugins — alerting
 # ============================================================================
 # Default: none.  Selectable backends ship under plugins/alerting/.
@@ -201,9 +205,8 @@ ALERTING_PLUGIN_DIR=/usr/local/lib/linux-dual-wan-failover/plugins/alerting
 ALERTING_PLUGIN_PATH=
 # route-guardian sends each alert type at most once per this many seconds
 # (a missing route would otherwise alert on every 10 s check).
-ALERT_RATE_LIMIT_SECONDS=300
-
 # ============================================================================
+ALERT_RATE_LIMIT_SECONDS=300
 # Plugins — backup-link quota provider (optional)
 # ============================================================================
 # Default: none.  Selectable providers ship under plugins/quota-providers/.
@@ -225,13 +228,14 @@ QUOTA_SNAPSHOT_PATH=/var/lib/linux-dual-wan-failover/quota-snapshot.json
 
 # Maximum age of the snapshot before the cap is ignored (graceful degradation
 # when the provider is stuck).
-QUOTA_SNAPSHOT_MAX_STALE_SEC=3600
-
 # Score caps per quota tier. The cap takes effect on the BACKUP_IFACE only.
-QUOTA_CAP_TIER_90=40    # ≥90 % of monthly quota → cap to 40
-QUOTA_CAP_TIER_96=10    # ≥96 % → cap to 10
-QUOTA_CAP_TIER_100=0    # ≥100 % → cap to 0 (effectively blocks failover)
-
+QUOTA_SNAPSHOT_MAX_STALE_SEC=3600
+# ≥90 % of monthly quota → cap to 40
+QUOTA_CAP_TIER_90=40
+# ≥96 % → cap to 10
+QUOTA_CAP_TIER_96=10
+# ≥100 % → cap to 0 (effectively blocks failover)
+QUOTA_CAP_TIER_100=0
 # Hard block (opt-in). The score caps above only steer the orchestrator: the
 # kernel keeps the backup default route, and when the primary loses carrier it
 # routes over the backup anyway. With QUOTA_HARD_BLOCK=true, quota-hard-block.sh
@@ -242,16 +246,15 @@ QUOTA_CAP_TIER_100=0    # ≥100 % → cap to 0 (effectively blocks failover)
 # Trade-off: zero overage charges, total outage if the primary dies before the
 # quota resets. See docs/how-to/configure-quota-tracking.md.
 QUOTA_HARD_BLOCK=false
-QUOTA_HARD_BLOCK_PCT=99
 # Destinations that stay reachable via BACKUP_IFACE while blocked (space-
+QUOTA_HARD_BLOCK_PCT=99
 # separated IPv4 addresses/CIDRs) — typically the modem's own subnet, so the
 # quota provider can keep polling it. The DHCP broadcast is always allowed.
 QUOTA_HARD_BLOCK_ALLOW=""
 QUOTA_HARD_BLOCK_STATE_DIR=/var/lib/linux-dual-wan-failover-quota-block
 # Minimum seconds between two "failover blocked by quota hard block" alerts.
-QUOTA_BLOCK_NOTIFY_INTERVAL=3600
-
 # ============================================================================
+QUOTA_BLOCK_NOTIFY_INTERVAL=3600
 # Hardware sensors (optional)
 # ============================================================================
 # Backend for temperature / throttle monitoring. The failover logic does

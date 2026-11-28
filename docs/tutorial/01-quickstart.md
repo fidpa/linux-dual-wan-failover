@@ -136,3 +136,5 @@ simulation that leaves the link up — see
   operator buttons and a live dashboard (`sudo ./install.sh --with-web-ui`).
 - [Read the architecture](../reference/architecture-overview.md) to
   understand what each service does and why there are four.
+
+Configuration comments should be on separate lines. systemd EnvironmentFile may retain trailing comments as part of scalar values.

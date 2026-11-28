@@ -18,3 +18,12 @@ load ../helpers
 
     [ "$status" -eq 1 ]
 }
+
+
+@test "numeric and boolean defaults contain no inline comments" {
+    run grep -E \
+        '^[A-Z_][A-Z0-9_]*=([0-9]+|true|false)[[:space:]]+#' \
+        "$TEST_REPO_ROOT/config/failover.conf.example"
+
+    [ "$status" -eq 1 ]
+}
