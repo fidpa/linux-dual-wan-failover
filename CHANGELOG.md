@@ -5,6 +5,17 @@ All notable changes to `linux-dual-wan-failover` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Discover IPv4 gateways from NetworkManager DHCP options and resolve real gateways during emergency route recovery.
+
+
+### Fixed
+
+- Recover IPv4 gateways from NetworkManager DHCP router options when
+  the active default gateway is unavailable. Support pipe-separated
+  and multiline DHCP output and validate discovered IPv4 addresses.
+
 ## [0.13.0] - 2026-11-27: Manual failback no longer waits out the automatic cooldown
 
 After a manual failback the primary WAN link dropped again about a minute
