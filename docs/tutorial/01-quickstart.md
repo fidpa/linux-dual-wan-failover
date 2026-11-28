@@ -76,6 +76,8 @@ ALERTING_BACKEND=none                 # set to mattermost/webhook later if you w
 
 Everything else has working defaults.
 
+Use literal values for scalar configuration settings. systemd reads this file through `EnvironmentFile=` and does not expand shell parameter substitutions. Customize directory paths directly in `failover.conf`.
+
 ## 5. Enable and verify
 
 ```bash
@@ -134,3 +136,5 @@ simulation that leaves the link up — see
   operator buttons and a live dashboard (`sudo ./install.sh --with-web-ui`).
 - [Read the architecture](../reference/architecture-overview.md) to
   understand what each service does and why there are four.
+
+Configuration comments should be on separate lines. systemd EnvironmentFile may retain trailing comments as part of scalar values.
