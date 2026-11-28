@@ -76,6 +76,11 @@ ALERTING_BACKEND=none                 # set to mattermost/webhook later if you w
 
 Everything else has working defaults.
 
+For NetworkManager-managed WAN interfaces, gateway discovery can
+also use DHCP router options when the active IPv4 gateway is
+unavailable.
+
+
 ## 5. Enable and verify
 
 ```bash

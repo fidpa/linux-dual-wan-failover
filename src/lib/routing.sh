@@ -586,7 +586,36 @@ get_gateway_for_interface() {
 # Get gateway from NetworkManager device state (DHCP-lease-derived)
 get_gateway_from_nm() {
     local interface="$1"
-    nmcli -g IP4.GATEWAY device show "$interface" 2>/dev/null | head -1
+    local gateway
+
+    gateway=$(LC_ALL=C nmcli -g IP4.GATEWAY device show "$interface" 2>/dev/null) || gateway=""
+
+    if [[ -z "$gateway" || "$gateway" == "--" || "$gateway" == "0.0.0.0" ]]; then
+        # The DHCP router remains available even when NetworkManager
+        # suppresses automatic default routes.
+        gateway=$(LC_ALL=C nmcli -g DHCP4.OPTION device show "$interface" 2>/dev/null |
+            tr '|' '\n' |
+            awk '$1 == "routers" && $2 == "=" && !found {
+                print $3
+                found = 1
+            }') || return 1
+    fi
+
+    if [[ ! "$gateway" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        return 1
+    fi
+
+    local octet
+    local -a octets
+    IFS=. read -r -a octets <<< "$gateway"
+
+    for octet in "${octets[@]}"; do
+        (( 10#$octet <= 255 )) || return 1
+    done
+
+    [[ "$gateway" != "0.0.0.0" ]] || return 1
+
+    printf '%s\n' "$gateway"
 }
 
 # ============================================================================
