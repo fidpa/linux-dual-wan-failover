@@ -35,10 +35,10 @@ readonly CHECK_INTERVAL="${ROUTE_GUARDIAN_CHECK_INTERVAL:-10}"
 # Set during pre-flight, updated by periodic recovery checks
 LTE_AVAILABLE=false  # Assume unavailable until proven otherwise
 
-# Best Practice 2025: Conditional readonly prevents conflicts when common.sh tries to restore caller's LOG_FILE
+# LOG_FILE must remain writable while common.sh initializes logging.
 # Allows parent scripts to override LOG_FILE via environment, falls back to default if not set
 if [[ -z "${LOG_FILE:-}" ]]; then
-    readonly LOG_FILE="/var/log/linux-dual-wan-failover/route-guardian.log"
+    LOG_FILE="/var/log/linux-dual-wan-failover/route-guardian.log"
 fi
 
 # ROUTE_GUARDIAN_STATE_DIR: test hook, the unit's StateDirectory= is this path
