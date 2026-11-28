@@ -333,7 +333,7 @@ safe_route_change() {
 _swap_primary_metric() {
     local from_metric="$1"  # Expected current metric (for logging/validation)
     local to_metric="$2"
-    local gateway="${DSL_GATEWAY:-192.0.2.1}"
+    local gateway="${PRIMARY_GATEWAY:-${DSL_GATEWAY:-}}"
     local iface="${PRIMARY_IFACE:-eth0}"
     local nm_conn="${NM_PRIMARY_CONNECTION:-eth0}"
 
@@ -373,7 +373,18 @@ _swap_primary_metric() {
     # Get current gateway from routing table (may differ from config after DHCP)
     local current_gw
     current_gw=$(ip route show default dev "$iface" 2>/dev/null | head -1 | awk '{print $3}')
-    [[ -z "$current_gw" ]] && current_gw="$gateway"
+    if [[ -z "$current_gw" ]]; then
+        current_gw="${gateway:-}"
+    fi
+
+    if [[ -z "$current_gw" ]]; then
+        current_gw=$(get_gateway_for_interface "$iface") || current_gw=""
+    fi
+
+    if [[ -z "$current_gw" ]]; then
+        log "ERROR" "Cannot swap route metric: no gateway found for $iface"
+        return 1
+    fi
 
     # Delete ALL existing default routes for this interface (any metric)
     while ip route del default dev "$iface" 2>/dev/null; do
@@ -516,14 +527,18 @@ emergency_restore_any_route() {
     log "WARNING" "EMERGENCY RECOVERY: Attempting to restore any available route"
 
     # Define known routes (from config)
-    local dsl_gateway="${DSL_GATEWAY:-192.0.2.1}"
-    local lte_gateway="${LTE_GATEWAY:-192.0.2.10}"
+    local dsl_gateway="${PRIMARY_GATEWAY:-${DSL_GATEWAY:-}}"
+    local lte_gateway="${BACKUP_GATEWAY:-${LTE_GATEWAY:-}}"
     local primary_iface="${PRIMARY_IFACE:-eth0}"
     local backup_iface="${BACKUP_IFACE:-lte0}"
 
     # Try DSL first (preferred) — always use normal metric (clean state in emergency)
     local primary_metric="${PRIMARY_METRIC_NORMAL:-50}"
-    if _interface_link_up "$primary_iface"; then
+    if [[ -z "$dsl_gateway" ]]; then
+        dsl_gateway=$(get_gateway_for_interface "$primary_iface") || dsl_gateway=""
+    fi
+
+    if [[ -n "$dsl_gateway" ]] && _interface_link_up "$primary_iface"; then
         log "INFO" "EMERGENCY: Attempting DSL route restoration"
         if ip route add default via "$dsl_gateway" dev "$primary_iface" metric "$primary_metric" 2>/dev/null; then
             log "WARNING" "EMERGENCY: DSL route restored (metric $primary_metric)"
@@ -534,10 +549,14 @@ emergency_restore_any_route() {
     fi
 
     # Fallback to LTE
-    if _interface_link_up "$backup_iface"; then
+    if [[ -z "$lte_gateway" ]]; then
+        lte_gateway=$(get_gateway_for_interface "$backup_iface") || lte_gateway=""
+    fi
+
+    if [[ -n "$lte_gateway" ]] && _interface_link_up "$backup_iface"; then
         log "INFO" "EMERGENCY: Attempting LTE route restoration"
-        if ip route add default via "$lte_gateway" dev "$backup_iface" metric 200 2>/dev/null; then
-            log "WARNING" "EMERGENCY: LTE route restored (metric 200)"
+        if ip route add default via "$lte_gateway" dev "$backup_iface" metric "${BACKUP_METRIC:-200}" 2>/dev/null; then
+            log "WARNING" "EMERGENCY: LTE route restored (metric ${BACKUP_METRIC:-200})"
             # Send critical notification
             send_notification "⚠️ EMERGENCY RECOVERY: LTE route restored after rollback failure" || true
             return 0

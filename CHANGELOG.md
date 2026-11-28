@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Discover IPv4 gateways from NetworkManager DHCP options and resolve real gateways during emergency route recovery.
+
+
 ### Fixed
 
 - Recover IPv4 gateways from NetworkManager DHCP router options when
