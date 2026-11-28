@@ -985,75 +985,67 @@ cleanup_conflicting_routes() {
 # v2.2 NEW: Enhanced duplicate route cleanup for different metrics
 cleanup_interface_duplicate_routes() {
     local interface="$1"
+    local expected_metric
 
-    # Get all default routes for this interface
-    local routes
-    routes=$(ip route show | grep "^default via.*dev $interface" || true)
-    [[ -z "$routes" ]] && return 0  # No routes found, nothing to do
-
-    local route_count
-    route_count=$(echo "$routes" | wc -l)
-
-    if [[ "$route_count" -gt 1 ]]; then
-        log_message "WARNING" "DUPLICATE" "Found $route_count default routes for $interface - cleaning up"
-
-        # Find the route with the lowest metric to keep
-        local lowest_metric=999999
-        local route_to_keep=""
-
-        while IFS= read -r route; do
-            [[ -n "$route" ]] || continue
-            local metric
-            metric=$(grep -o "metric [0-9]*" <<< "$route" | awk '{print $2}')
-            metric=${metric:-1024}  # Default metric if not specified
-
-            if [[ "$metric" -lt "$lowest_metric" ]]; then
-                lowest_metric="$metric"
-                route_to_keep="$route"
-            fi
-        done <<< "$routes"
-
-        # Delete all routes except the one with lowest metric
-        while IFS= read -r route; do
-            [[ -n "$route" ]] || continue
-            if [[ "$route" != "$route_to_keep" ]]; then
-                local gateway
-                gateway=$(awk '{print $3}' <<< "$route")
-                local metric
-                metric=$(grep -o "metric [0-9]*" <<< "$route" | awk '{print $2}')
-
-                # Deleting default routes must not overlap the orchestrator's
-                # metric swap. Region kept tight around the ip command; the alert
-                # forks and therefore fires after the release.
-                local del_ok=1
-                if _acquire_route_lock; then
-                    if [[ -n "$metric" ]]; then
-                        ip route del default via "$gateway" dev "$interface" metric "$metric" 2>/dev/null && del_ok=0
-                    else
-                        ip route del default via "$gateway" dev "$interface" 2>/dev/null && del_ok=0
-                    fi
-                    _release_route_lock
-                else
-                    log_message "INFO" "CLEANUP" "Route lock busy (failover in progress) - skipping duplicate cleanup"
-                fi
-
-                if [[ $del_ok -eq 0 ]]; then
-                    log_message "SUCCESS" "CLEANUP" "Removed duplicate route: $route"
-                    if [[ -n "$metric" ]]; then
-                        rg_alert "ROUTE_CLEANUP" "✅ Duplicate route removed" "Interface: $interface
-Removed: metric $metric"
-                    else
-                        rg_alert "ROUTE_CLEANUP" "✅ Duplicate route removed" "Interface: $interface"
-                    fi
-                fi
-            fi
-        done <<< "$routes"
-
-        log_message "INFO" "CLEANUP" "Kept primary route: $route_to_keep"
+    if ! _acquire_route_lock; then
         return 0
     fi
 
-    return 1
+    if _failover_lock_active; then
+        _release_route_lock
+        return 0
+    fi
+
+    if [[ "$interface" == "$DSL_INTERFACE" ]]; then
+        expected_metric=$(get_expected_primary_metric)
+    else
+        expected_metric="${BACKUP_METRIC:-200}"
+    fi
+
+    local routes
+    routes=$(ip -4 route show default dev "$interface" || true)
+
+    local route metric gateway
+    local expected_found=false
+
+    while IFS= read -r route; do
+        [[ -n "$route" ]] || continue
+        metric=$(grep -o "metric [0-9]*" <<< "$route" |
+            awk '{print $2}' || true)
+        metric=${metric:-0}
+
+        if [[ "$metric" == "$expected_metric" ]]; then
+            expected_found=true
+            break
+        fi
+    done <<< "$routes"
+
+    # Never delete the only usable route while waiting for
+    # NetworkManager to apply the expected metric.
+    if [[ "$expected_found" != true ]]; then
+        _release_route_lock
+        return 0
+    fi
+
+    while IFS= read -r route; do
+        [[ -n "$route" ]] || continue
+        metric=$(grep -o "metric [0-9]*" <<< "$route" |
+            awk '{print $2}' || true)
+        metric=${metric:-0}
+
+        [[ "$metric" != "$expected_metric" ]] || continue
+
+        gateway=$(awk '{print $3}' <<< "$route")
+
+        if ip -4 route del default via "$gateway" \
+            dev "$interface" metric "$metric" 2>/dev/null; then
+            log_message "SUCCESS" "CLEANUP" \
+                "Removed unexpected metric $metric on $interface"
+        fi
+    done <<< "$routes"
+
+    _release_route_lock
+    return 0
 }
 
 # v2.1 NEW: Preventive issue detection (warns before problems occur)
