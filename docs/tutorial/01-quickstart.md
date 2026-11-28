@@ -76,6 +76,8 @@ ALERTING_BACKEND=none                 # set to mattermost/webhook later if you w
 
 Everything else has working defaults.
 
+Use literal values for scalar configuration settings. systemd reads this file through `EnvironmentFile=` and does not expand shell parameter substitutions. Customize directory paths directly in `failover.conf`.
+
 ## 5. Enable and verify
 
 ```bash

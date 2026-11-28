@@ -94,7 +94,7 @@ DNS_TEST_DOMAINS=("google.com" "cloudflare.com")
 # active backup with the primary's source IP — return traffic gets dropped
 # by the ISP or never matches the source — and the test reports a 999 ms
 # timeout for a perfectly healthy primary, blocking failback.
-DNS_TEST_METHOD="${DNS_TEST_METHOD:-doh}"
+DNS_TEST_METHOD=doh
 
 # ============================================================================
 # Timing
@@ -264,13 +264,11 @@ HARDWARE_TEMP_BACKEND=none
 # ============================================================================
 # Logging / state directories (override only if you know why)
 # ============================================================================
-# Default-guard form (${VAR:-default}): an environment override — e.g. a
-# test harness pointing STATE_DIR at a tmpdir — must not be clobbered by
-# sourcing this file.
-
-LOG_DIR="${LOG_DIR:-/var/log/linux-dual-wan-failover}"
-STATE_DIR="${STATE_DIR:-/var/lib/linux-dual-wan-failover}"
-RUNTIME_DIR="${RUNTIME_DIR:-/run/linux-dual-wan-failover}"
+# Use literal values: systemd EnvironmentFile does not expand
+# shell parameter substitutions. Customize these paths here.
+LOG_DIR=/var/log/linux-dual-wan-failover
+STATE_DIR=/var/lib/linux-dual-wan-failover
+RUNTIME_DIR=/run/linux-dual-wan-failover
 
 # Per-service log files next to the journal (bash-production-toolkit v3.x).
 # Default true, set in src/lib/common.sh. false keeps the journal only; the
